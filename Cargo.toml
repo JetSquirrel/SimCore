@@ -1,0 +1,17 @@
+[package]
+name = "simu"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "simu"
+path = "src/lib.rs"
+
+[features]
+monte-carlo = ["dep:rayon"]
+
+[dependencies]
+rand = "0.8"
+rand_distr = "0.4"
+thiserror = "1"
+rayon = { version = "1", optional = true }
