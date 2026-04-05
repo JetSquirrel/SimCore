@@ -5,6 +5,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use rand::rngs::StdRng;
+use rand::{RngCore, SeedableRng};
+
 use crate::event::{new_event, EventAwaitable, EventTrigger};
 use crate::executor::{make_waker, SimState};
 use crate::timeout::Timeout;
@@ -16,22 +19,39 @@ use crate::timeout::Timeout;
 /// separate threads.
 pub struct SimEnv {
     state: Rc<RefCell<SimState>>,
+    rng: Rc<RefCell<StdRng>>,
 }
 
 /// A lightweight handle to the simulation environment, intended to be cloned
 /// and passed into spawned processes.
 ///
-/// Both `SimEnv` and `EnvHandle` point to the same underlying `SimState`.
+/// Both `SimEnv` and all `EnvHandle` clones share the same underlying
+/// `SimState` and the same `StdRng` instance.
 #[derive(Clone)]
 pub struct EnvHandle {
     pub(crate) state: Rc<RefCell<SimState>>,
+    pub(crate) rng: Rc<RefCell<StdRng>>,
 }
 
 impl SimEnv {
-    /// Create a new environment starting at time 0.0.
+    /// Create a new environment seeded from OS entropy.
+    ///
+    /// Use [`with_seed`](SimEnv::with_seed) when reproducibility is required.
     pub fn new() -> Self {
         SimEnv {
             state: Rc::new(RefCell::new(SimState::new())),
+            rng: Rc::new(RefCell::new(StdRng::from_entropy())),
+        }
+    }
+
+    /// Create a new environment with a fixed RNG seed.
+    ///
+    /// Given the same seed and process logic the simulation will produce
+    /// identical results across runs.
+    pub fn with_seed(seed: u64) -> Self {
+        SimEnv {
+            state: Rc::new(RefCell::new(SimState::new())),
+            rng: Rc::new(RefCell::new(StdRng::seed_from_u64(seed))),
         }
     }
 
@@ -39,6 +59,7 @@ impl SimEnv {
     pub fn handle(&self) -> EnvHandle {
         EnvHandle {
             state: Rc::clone(&self.state),
+            rng: Rc::clone(&self.rng),
         }
     }
 
@@ -168,6 +189,18 @@ impl EnvHandle {
         self.state.borrow().current_time
     }
 
+    /// Borrow the shared RNG mutably.
+    ///
+    /// The returned guard derefs to `StdRng`, which implements `rand::Rng`,
+    /// so distributions can be sampled directly:
+    ///
+    /// ```ignore
+    /// let duration = env.rng().sample(Exp::new(1.0 / 20.0).unwrap());
+    /// ```
+    pub fn rng(&self) -> impl rand::RngCore + '_ {
+        RngGuard(self.rng.borrow_mut())
+    }
+
     /// Create a `Timeout` that resolves after `delay` simulated time units.
     pub fn timeout(&self, delay: f64) -> Timeout {
         let deadline = self.state.borrow().current_time + delay;
@@ -184,5 +217,18 @@ impl EnvHandle {
         let mut state = self.state.borrow_mut();
         let id = state.alloc_process_id();
         state.pending_spawns.push((id, Box::pin(future)));
+    }
+}
+
+/// Newtype wrapper so `EnvHandle::rng()` can return an `impl RngCore + '_`
+/// without exposing `RefMut` in the public API.
+struct RngGuard<'a>(std::cell::RefMut<'a, StdRng>);
+
+impl RngCore for RngGuard<'_> {
+    fn next_u32(&mut self) -> u32 { self.0.next_u32() }
+    fn next_u64(&mut self) -> u64 { self.0.next_u64() }
+    fn fill_bytes(&mut self, dest: &mut [u8]) { self.0.fill_bytes(dest) }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
+        self.0.try_fill_bytes(dest)
     }
 }

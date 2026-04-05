@@ -1,65 +1,79 @@
+use rand::Rng;
+use rand_distr::Exp;
 use simu::env::{EnvHandle, SimEnv};
 use simu::Resource;
 
 // ---------------------------------------------------------------------------
-// Step 3: Resource — nurse serialises triage, beds limit concurrent treatment
+// Step 4: Seeded RNG — stochastic arrivals and treatment durations
 // ---------------------------------------------------------------------------
 
-/// A single patient:
-///   1. Requests the triage nurse (capacity 1 → serialises assessment).
-///   2. Holds the nurse for `triage_duration`, then releases her.
-///   3. Requests a bed (capacity 3 → blocks when all occupied).
-///   4. Holds the bed for `treatment_duration`, then is discharged.
+const SIM_DURATION: f64 = 480.0; // 8-hour shift in minutes
+const ARRIVAL_RATE: f64 = 1.0 / 8.0; // one patient every ~8 minutes
+const TRIAGE_DURATION: f64 = 5.0; // nurse takes 5 min per patient (fixed)
+const MEAN_TREATMENT: f64 = 20.0; // mean treatment time in minutes
+
+/// Arrival process: spawns a new patient at each Poisson inter-arrival time.
+async fn arrivals(env: EnvHandle, nurse: Resource, beds: Resource) {
+    let exp = Exp::new(ARRIVAL_RATE).unwrap();
+    let mut patient_id = 1_u32;
+    loop {
+        let inter_arrival = env.rng().sample(exp);
+        env.timeout(inter_arrival).await;
+
+        if env.now() > SIM_DURATION {
+            break;
+        }
+
+        let treatment = env.rng().sample(Exp::new(1.0 / MEAN_TREATMENT).unwrap());
+        env.spawn(patient(
+            env.clone(),
+            patient_id,
+            treatment,
+            nurse.clone(),
+            beds.clone(),
+        ));
+        patient_id += 1;
+    }
+    println!("[t={:5.1}] No more arrivals ({} patients total)", env.now(), patient_id - 1);
+}
+
+/// A single patient: triage nurse → bed → treatment → discharge.
 async fn patient(
     env: EnvHandle,
     id: u32,
-    arrival: f64,
-    triage_duration: f64,
     treatment_duration: f64,
     nurse: Resource,
     beds: Resource,
 ) {
-    env.timeout(arrival).await;
     println!("[t={:5.1}] Patient {:2} arrives", env.now(), id);
 
     let _nurse_guard = nurse.request().await;
     println!("[t={:5.1}] Patient {:2} starts triage  (nurse: {}/{})",
         env.now(), id, nurse.in_use(), nurse.capacity());
 
-    env.timeout(triage_duration).await;
+    env.timeout(TRIAGE_DURATION).await;
     println!("[t={:5.1}] Patient {:2} triage done, awaiting bed", env.now(), id);
-    drop(_nurse_guard); // release nurse before waiting for a bed
+    drop(_nurse_guard);
 
     let _bed_guard = beds.request().await;
-    println!("[t={:5.1}] Patient {:2} admitted to bed  (beds: {}/{})",
+    println!("[t={:5.1}] Patient {:2} admitted        (beds: {}/{})",
         env.now(), id, beds.in_use(), beds.capacity());
 
     env.timeout(treatment_duration).await;
-    println!("[t={:5.1}] Patient {:2} discharged       (beds: {}/{})",
+    println!("[t={:5.1}] Patient {:2} discharged      (beds: {}/{})",
         env.now(), id, beds.in_use() - 1, beds.capacity());
-    // _bed_guard dropped here
 }
 
 fn main() {
-    let mut env = SimEnv::new();
+    // Same seed → identical output every run.
+    let mut env = SimEnv::with_seed(42);
     let h = env.handle();
 
-    let nurse = Resource::new(1); // one triage nurse
-    let beds  = Resource::new(3); // three beds
+    let nurse = Resource::new(1);
+    let beds  = Resource::new(3);
 
-    // (id, arrival, triage_duration, treatment_duration) — times in minutes
-    for (id, arrival, triage, treatment) in [
-        (1_u32,  0.0_f64, 5.0_f64, 30.0_f64),
-        (2,       2.0,    5.0,     20.0),
-        (3,       4.0,    5.0,     15.0),
-        (4,       6.0,    5.0,     25.0),
-        (5,       8.0,    5.0,     10.0),
-        (6,      10.0,    5.0,     35.0),
-    ] {
-        env.spawn(patient(h.clone(), id, arrival, triage, treatment,
-                          nurse.clone(), beds.clone()));
-    }
-
+    env.spawn(arrivals(h.clone(), nurse, beds));
     env.run();
+
     println!("Simulation complete at t={:.1}", env.now());
 }
