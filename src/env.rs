@@ -5,6 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::event::{new_event, EventAwaitable, EventTrigger};
 use crate::executor::{make_waker, SimState};
 use crate::timeout::Timeout;
 
@@ -57,6 +58,11 @@ impl SimEnv {
     /// Create a `Timeout` that resolves after `delay` simulated time units.
     pub fn timeout(&self, delay: f64) -> Timeout {
         self.handle().timeout(delay)
+    }
+
+    /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
+    pub fn event(&self) -> (EventTrigger, EventAwaitable) {
+        new_event()
     }
 
     /// Run until the event queue is empty.
@@ -166,6 +172,11 @@ impl EnvHandle {
     pub fn timeout(&self, delay: f64) -> Timeout {
         let deadline = self.state.borrow().current_time + delay;
         Timeout::new(deadline, self.clone())
+    }
+
+    /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
+    pub fn event(&self) -> (EventTrigger, EventAwaitable) {
+        new_event()
     }
 
     /// Spawn a child process from within a running process.
