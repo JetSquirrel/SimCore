@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
@@ -29,8 +29,8 @@ pub struct SimEnv {
 /// `SimState` and the same `StdRng` instance.
 #[derive(Clone)]
 pub struct EnvHandle {
-    pub(crate) state: Rc<RefCell<SimState>>,
-    pub(crate) rng: Rc<RefCell<StdRng>>,
+    state: Rc<RefCell<SimState>>,
+    rng: Rc<RefCell<StdRng>>,
 }
 
 impl SimEnv {
@@ -71,9 +71,7 @@ impl SimEnv {
     /// Spawn a process. The future is queued and will be polled on the next
     /// executor iteration. May be called before or during `run()`.
     pub fn spawn<F: Future<Output = ()> + 'static>(&self, future: F) {
-        let mut state = self.state.borrow_mut();
-        let id = state.alloc_process_id();
-        state.pending_spawns.push((id, Box::pin(future)));
+        self.handle().spawn(future);
     }
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
@@ -138,11 +136,21 @@ impl SimEnv {
     fn drain_pending_spawns(&self) {
         let spawns: Vec<_> =
             std::mem::take(&mut self.state.borrow_mut().pending_spawns);
-        for (id, fut) in spawns {
-            let mut state = self.state.borrow_mut();
-            state.processes.insert(id, fut);
-            state.ready_queue.lock().unwrap().push(id);
+        if spawns.is_empty() {
+            return;
         }
+        // Collect IDs before mutating processes so we can batch the ready_queue
+        // push without holding two borrows of SimState simultaneously.
+        let ids: Vec<usize> = spawns.iter().map(|(id, _)| *id).collect();
+        {
+            let mut state = self.state.borrow_mut();
+            for (id, fut) in spawns {
+                state.processes.insert(id, fut);
+            }
+        }
+        // Clone the Arc so the Ref<SimState> is dropped before we lock.
+        let rq = Arc::clone(&self.state.borrow().ready_queue);
+        rq.lock().unwrap().extend(ids);
     }
 
     /// Poll every process in the ready queue until the queue is empty.
@@ -151,12 +159,13 @@ impl SimEnv {
     /// it can freely borrow `SimState` via its `EnvHandle` without triggering
     /// a `RefCell` panic. Processes that return `Pending` are re-inserted.
     fn poll_ready(&self) {
+        // Clone the ready_queue Arc once; it never changes after construction.
+        let ready_queue = Arc::clone(&self.state.borrow().ready_queue);
+
         loop {
-            let ready: Vec<usize> = {
-                let state = self.state.borrow();
-                let mut rq = state.ready_queue.lock().unwrap();
-                std::mem::take(&mut *rq)
-            };
+            let ready: Vec<usize> = std::mem::take(
+                &mut *ready_queue.lock().unwrap()
+            );
 
             if ready.is_empty() {
                 break;
@@ -166,9 +175,7 @@ impl SimEnv {
                 let process = self.state.borrow_mut().processes.remove(&id);
 
                 if let Some(mut process) = process {
-                    let ready_queue =
-                        Arc::clone(&self.state.borrow().ready_queue);
-                    let waker = make_waker(id, ready_queue);
+                    let waker = make_waker(id, Arc::clone(&ready_queue));
                     let mut cx = Context::from_waker(&waker);
 
                     if let Poll::Pending = process.as_mut().poll(&mut cx) {
@@ -191,8 +198,8 @@ impl EnvHandle {
 
     /// Borrow the shared RNG mutably.
     ///
-    /// The returned guard derefs to `StdRng`, which implements `rand::Rng`,
-    /// so distributions can be sampled directly:
+    /// The returned guard implements `rand::RngCore`, so distributions can be
+    /// sampled directly:
     ///
     /// ```ignore
     /// let duration = env.rng().sample(Exp::new(1.0 / 20.0).unwrap());
@@ -217,6 +224,14 @@ impl EnvHandle {
         let mut state = self.state.borrow_mut();
         let id = state.alloc_process_id();
         state.pending_spawns.push((id, Box::pin(future)));
+    }
+
+    /// Schedule a wakeup at `deadline` in the event queue.
+    ///
+    /// Called by [`Timeout`] — the only crate-internal user that needs direct
+    /// access to the event queue.
+    pub(crate) fn schedule_wakeup(&self, deadline: f64, waker: Waker) {
+        self.state.borrow_mut().schedule_wakeup(deadline, waker);
     }
 }
 

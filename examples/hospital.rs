@@ -12,16 +12,16 @@ use simu::Resource;
 // Step 5: Monte Carlo — 10 parallel runs, per-run log files, summary table
 // ---------------------------------------------------------------------------
 
-const SIM_DURATION: f64  = 480.0;        // 8-hour shift in minutes
-const ARRIVAL_RATE: f64  = 1.0 / 8.0;   // one patient every ~8 minutes
-const TRIAGE_DURATION: f64 = 5.0;        // nurse takes 5 min per patient (fixed)
-const MEAN_TREATMENT: f64  = 20.0;       // mean treatment time in minutes
+const SIM_DURATION: f64    = 480.0;       // 8-hour shift in minutes
+const ARRIVAL_RATE: f64    = 1.0 / 8.0;  // one patient every ~8 minutes
+const TRIAGE_DURATION: f64 = 5.0;         // nurse takes 5 min per patient (fixed)
+const MEAN_TREATMENT: f64  = 20.0;        // mean treatment time in minutes
 
 // ---------------------------------------------------------------------------
-// Shared state types (Rc<RefCell<>> — safe because the executor is single-threaded)
+// Shared simulation context
 // ---------------------------------------------------------------------------
 
-type Log   = Rc<RefCell<Vec<String>>>;
+type Log = Rc<RefCell<Vec<String>>>;
 
 struct Stats {
     patients_treated: u32,
@@ -29,7 +29,15 @@ struct Stats {
     total_bed_wait:   f64,
 }
 
-type SharedStats = Rc<RefCell<Stats>>;
+/// All shared state passed into each process. Bundling avoids parameter sprawl
+/// and makes it easy to add resources or metrics without changing every signature.
+#[derive(Clone)]
+struct HospitalCtx {
+    nurse: Resource,
+    beds:  Resource,
+    log:   Log,
+    stats: Rc<RefCell<Stats>>,
+}
 
 pub struct SimResult {
     pub seed:             u64,
@@ -43,13 +51,7 @@ pub struct SimResult {
 // ---------------------------------------------------------------------------
 
 /// Arrival process: generates patients at Poisson inter-arrival times.
-async fn arrivals(
-    env:   EnvHandle,
-    nurse: Resource,
-    beds:  Resource,
-    log:   Log,
-    stats: SharedStats,
-) {
+async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
     let exp = Exp::new(ARRIVAL_RATE).unwrap();
     let mut patient_id = 1_u32;
 
@@ -58,7 +60,7 @@ async fn arrivals(
         env.timeout(inter_arrival).await;
 
         if env.now() > SIM_DURATION {
-            log.borrow_mut().push(format!(
+            ctx.log.borrow_mut().push(format!(
                 "[t={:5.1}] No more arrivals ({} patients total)",
                 env.now(), patient_id - 1,
             ));
@@ -66,55 +68,44 @@ async fn arrivals(
         }
 
         let treatment = env.rng().sample(Exp::new(1.0 / MEAN_TREATMENT).unwrap());
-        env.spawn(patient(
-            env.clone(), patient_id, treatment,
-            nurse.clone(), beds.clone(), log.clone(), stats.clone(),
-        ));
+        env.spawn(patient(env.clone(), patient_id, treatment, ctx.clone()));
         patient_id += 1;
     }
 }
 
 /// A single patient: wait for triage nurse → bed → treatment → discharge.
-async fn patient(
-    env:                EnvHandle,
-    id:                 u32,
-    treatment_duration: f64,
-    nurse:              Resource,
-    beds:               Resource,
-    log:                Log,
-    stats:              SharedStats,
-) {
-    log.borrow_mut().push(format!("[t={:5.1}] Patient {:2} arrives", env.now(), id));
+async fn patient(env: EnvHandle, id: u32, treatment_duration: f64, ctx: HospitalCtx) {
+    ctx.log.borrow_mut().push(format!("[t={:5.1}] Patient {:2} arrives", env.now(), id));
 
     let nurse_wait_start = env.now();
-    let _nurse = nurse.request().await;
+    let _nurse = ctx.nurse.request().await;
     let nurse_wait = env.now() - nurse_wait_start;
-    log.borrow_mut().push(format!(
+    ctx.log.borrow_mut().push(format!(
         "[t={:5.1}] Patient {:2} starts triage  (nurse: {}/{})",
-        env.now(), id, nurse.in_use(), nurse.capacity(),
+        env.now(), id, ctx.nurse.in_use(), ctx.nurse.capacity(),
     ));
 
     env.timeout(TRIAGE_DURATION).await;
-    log.borrow_mut().push(format!(
+    ctx.log.borrow_mut().push(format!(
         "[t={:5.1}] Patient {:2} triage done, awaiting bed", env.now(), id,
     ));
     drop(_nurse);
 
     let bed_wait_start = env.now();
-    let _bed = beds.request().await;
+    let _bed = ctx.beds.request().await;
     let bed_wait = env.now() - bed_wait_start;
-    log.borrow_mut().push(format!(
+    ctx.log.borrow_mut().push(format!(
         "[t={:5.1}] Patient {:2} admitted        (beds: {}/{})",
-        env.now(), id, beds.in_use(), beds.capacity(),
+        env.now(), id, ctx.beds.in_use(), ctx.beds.capacity(),
     ));
 
     env.timeout(treatment_duration).await;
-    log.borrow_mut().push(format!(
+    ctx.log.borrow_mut().push(format!(
         "[t={:5.1}] Patient {:2} discharged      (beds: {}/{})",
-        env.now(), id, beds.in_use() - 1, beds.capacity(),
+        env.now(), id, ctx.beds.in_use() - 1, ctx.beds.capacity(),
     ));
 
-    let mut s = stats.borrow_mut();
+    let mut s = ctx.stats.borrow_mut();
     s.patients_treated += 1;
     s.total_nurse_wait += nurse_wait;
     s.total_bed_wait   += bed_wait;
@@ -128,26 +119,28 @@ fn run_simulation(seed: u64) -> SimResult {
     let mut env = SimEnv::with_seed(seed);
     let h       = env.handle();
 
-    let nurse = Resource::new(1);
-    let beds  = Resource::new(3);
-    let log:   Log         = Rc::new(RefCell::new(Vec::new()));
-    let stats: SharedStats = Rc::new(RefCell::new(Stats {
-        patients_treated: 0,
-        total_nurse_wait: 0.0,
-        total_bed_wait:   0.0,
-    }));
+    let ctx = HospitalCtx {
+        nurse: Resource::new(1),
+        beds:  Resource::new(3),
+        log:   Rc::new(RefCell::new(Vec::new())),
+        stats: Rc::new(RefCell::new(Stats {
+            patients_treated: 0,
+            total_nurse_wait: 0.0,
+            total_bed_wait:   0.0,
+        })),
+    };
 
-    env.spawn(arrivals(h, nurse, beds, log.clone(), stats.clone()));
+    env.spawn(arrivals(h, ctx.clone()));
     env.run();
 
     // Write per-run log to its own file.
     let path = format!("run_{:02}.log", seed);
     let mut file = File::create(&path).expect("could not create log file");
-    for line in log.borrow().iter() {
+    for line in ctx.log.borrow().iter() {
         writeln!(file, "{}", line).unwrap();
     }
 
-    let s = stats.borrow();
+    let s = ctx.stats.borrow();
     let n = s.patients_treated;
     SimResult {
         seed,
@@ -164,7 +157,6 @@ fn run_simulation(seed: u64) -> SimResult {
 fn main() {
     let results = simu::monte_carlo::run(0..10, run_simulation);
 
-    // Header
     println!("{:>6}  {:>8}  {:>18}  {:>15}",
         "Seed", "Patients", "Nurse wait (mean)", "Bed wait (mean)");
     println!("{}", "-".repeat(54));
@@ -174,11 +166,10 @@ fn main() {
             r.seed, r.patients_treated, r.mean_nurse_wait, r.mean_bed_wait);
     }
 
-    // Aggregate means across all runs
-    let n_runs       = results.len() as f64;
+    let n_runs        = results.len() as f64;
     let mean_patients = results.iter().map(|r| r.patients_treated as f64).sum::<f64>() / n_runs;
-    let mean_nurse    = results.iter().map(|r| r.mean_nurse_wait).sum::<f64>()          / n_runs;
-    let mean_bed      = results.iter().map(|r| r.mean_bed_wait).sum::<f64>()            / n_runs;
+    let mean_nurse    = results.iter().map(|r| r.mean_nurse_wait).sum::<f64>() / n_runs;
+    let mean_bed      = results.iter().map(|r| r.mean_bed_wait).sum::<f64>()   / n_runs;
 
     println!("{}", "-".repeat(54));
     println!("{:>6}  {:>8.1}  {:>18.1}  {:>15.1}",

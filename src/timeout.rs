@@ -32,11 +32,7 @@ impl Future for Timeout {
         if self.scheduled {
             Poll::Ready(())
         } else {
-            let deadline = self.deadline;
-            self.env
-                .state
-                .borrow_mut()
-                .schedule_wakeup(deadline, cx.waker().clone());
+            self.env.schedule_wakeup(self.deadline, cx.waker().clone());
             self.scheduled = true;
             Poll::Pending
         }
