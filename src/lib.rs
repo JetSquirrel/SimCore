@@ -4,4 +4,6 @@ pub mod event;
 pub mod resource;
 pub mod timeout;
 
+pub use resource::{Resource, ResourceGuard, ResourceRequest};
+
 mod executor;

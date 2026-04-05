@@ -1,57 +1,63 @@
 use simu::env::{EnvHandle, SimEnv};
-use simu::event::EventAwaitable;
+use simu::Resource;
 
 // ---------------------------------------------------------------------------
-// Step 2: triage nurse + manual event
+// Step 3: Resource — nurse serialises triage, beds limit concurrent treatment
 // ---------------------------------------------------------------------------
 
-/// The triage nurse assesses a batch of waiting patients, then fires the
-/// event to release them all into the treatment queue simultaneously.
-async fn triage_nurse(env: EnvHandle, trigger: simu::event::EventTrigger) {
-    println!("[t={:5.1}] Nurse begins triage assessment", env.now());
-    env.timeout(10.0).await;
-    println!("[t={:5.1}] Nurse completes triage — signalling patients", env.now());
-    trigger.fire();
-}
-
-/// A patient waits for the triage signal, then undergoes treatment.
+/// A single patient:
+///   1. Requests the triage nurse (capacity 1 → serialises assessment).
+///   2. Holds the nurse for `triage_duration`, then releases her.
+///   3. Requests a bed (capacity 3 → blocks when all occupied).
+///   4. Holds the bed for `treatment_duration`, then is discharged.
 async fn patient(
     env: EnvHandle,
     id: u32,
     arrival: f64,
-    treatment: f64,
-    triage_done: EventAwaitable,
+    triage_duration: f64,
+    treatment_duration: f64,
+    nurse: Resource,
+    beds: Resource,
 ) {
     env.timeout(arrival).await;
-    println!("[t={:5.1}] Patient {:2} arrives and waits for triage", env.now(), id);
+    println!("[t={:5.1}] Patient {:2} arrives", env.now(), id);
 
-    triage_done.await;
-    println!("[t={:5.1}] Patient {:2} cleared by triage, starting treatment", env.now(), id);
+    let _nurse_guard = nurse.request().await;
+    println!("[t={:5.1}] Patient {:2} starts triage  (nurse: {}/{})",
+        env.now(), id, nurse.in_use(), nurse.capacity());
 
-    env.timeout(treatment).await;
-    println!("[t={:5.1}] Patient {:2} discharged", env.now(), id);
+    env.timeout(triage_duration).await;
+    println!("[t={:5.1}] Patient {:2} triage done, awaiting bed", env.now(), id);
+    drop(_nurse_guard); // release nurse before waiting for a bed
+
+    let _bed_guard = beds.request().await;
+    println!("[t={:5.1}] Patient {:2} admitted to bed  (beds: {}/{})",
+        env.now(), id, beds.in_use(), beds.capacity());
+
+    env.timeout(treatment_duration).await;
+    println!("[t={:5.1}] Patient {:2} discharged       (beds: {}/{})",
+        env.now(), id, beds.in_use() - 1, beds.capacity());
+    // _bed_guard dropped here
 }
 
 fn main() {
     let mut env = SimEnv::new();
     let h = env.handle();
 
-    // Create the triage event: all patients share the same awaitable.
-    let (trigger, triage_done) = env.event();
+    let nurse = Resource::new(1); // one triage nurse
+    let beds  = Resource::new(3); // three beds
 
-    // Spawn the nurse (fires at t=10).
-    env.spawn(triage_nurse(h.clone(), trigger));
-
-    // Five patients arrive before or around triage completion.
-    // (id, arrival time, treatment duration)
-    for (id, arrival, treatment) in [
-        (1_u32, 0.0_f64, 30.0_f64),
-        (2, 5.0, 20.0),
-        (3, 10.0, 15.0), // arrives exactly when triage completes
-        (4, 15.0, 25.0), // arrives after triage — resolves immediately
-        (5, 20.0, 10.0),
+    // (id, arrival, triage_duration, treatment_duration) — times in minutes
+    for (id, arrival, triage, treatment) in [
+        (1_u32,  0.0_f64, 5.0_f64, 30.0_f64),
+        (2,       2.0,    5.0,     20.0),
+        (3,       4.0,    5.0,     15.0),
+        (4,       6.0,    5.0,     25.0),
+        (5,       8.0,    5.0,     10.0),
+        (6,      10.0,    5.0,     35.0),
     ] {
-        env.spawn(patient(h.clone(), id, arrival, treatment, triage_done.clone()));
+        env.spawn(patient(h.clone(), id, arrival, triage, treatment,
+                          nurse.clone(), beds.clone()));
     }
 
     env.run();
