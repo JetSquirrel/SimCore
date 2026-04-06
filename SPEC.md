@@ -2,7 +2,7 @@
 
 ## 1. Project Overview
 
-`sim-rs` is a Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy but designed
+`simu` is a Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy but designed
 from the ground up to be idiomatic Rust, high-performance, and scalable. The primary target use case is
 complex workflow simulation (e.g., hospital operations), where thousands of independent processes
 interact through shared resources and events.
@@ -38,7 +38,7 @@ no benefit — and would introduce synchronisation overhead.
 
 **Chosen approach: single-threaded custom async executor per simulation instance.**
 
-- Each simulation process is an `async fn`.
+- Each simulation process is an `async fn` or `async` block.
 - A custom executor (not tokio/async-std) drives process execution based on simulated time, not
   wall-clock time.
 - The executor polls futures manually; no OS threads or I/O reactors are involved per simulation.
@@ -49,7 +49,7 @@ across runs.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Monte Carlo Driver (rayon / std::thread)                │
+│  Monte Carlo Driver (monte_carlo::run / std::thread)     │
 │                                                          │
 │  Thread 0            Thread 1            Thread N        │
 │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐ │
@@ -60,53 +60,76 @@ across runs.
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 4.2 Simulation Environment (`SimEnv`)
+### 4.2 Simulation Environment (`SimEnv` and `EnvHandle`)
 
-The environment is the central coordinator for a single simulation run. It owns:
+The environment is split into two types:
 
-- The **event queue** (min-heap ordered by simulated time, then by insertion order for tie-breaking).
-- The **current simulation time** (`f64`).
-- The set of **active processes** (futures awaiting simulation events).
-- A **seeded RNG** for reproducible random sampling.
+- **`SimEnv`** — owns all simulation state and drives the event loop. Not cloneable; lives on one thread.
+- **`EnvHandle`** — a lightweight, `Clone`able handle that processes use to interact with the simulation.
+  Obtained via `env.handle()` and passed into spawned processes.
 
-`SimEnv` is not `Send` or `Sync`. It is designed to live entirely on one thread.
+Both share the same underlying `SimState` and `StdRng` via `Rc<RefCell<>>`.
+
+`SimEnv` is `!Send + !Sync` (via `Rc`) and must live on one thread.
 
 ```rust
 pub struct SimEnv { /* opaque */ }
 
 impl SimEnv {
-    /// Create a new environment starting at time 0.0.
+    /// Create a new environment seeded from OS entropy.
     pub fn new() -> Self;
 
     /// Create with a specific RNG seed for reproducibility.
     pub fn with_seed(seed: u64) -> Self;
 
+    /// Return a cloneable handle for passing into processes.
+    pub fn handle(&self) -> EnvHandle;
+
     /// Current simulation time.
     pub fn now(&self) -> f64;
 
     /// Spawn a new process into the simulation.
-    pub fn spawn<F>(&self, process: F)
-    where
-        F: Future<Output = ()> + 'static;
+    pub fn spawn<F: Future<Output = ()> + 'static>(&self, process: F);
 
-    /// Run the simulation until the event queue is empty.
+    /// Run until the event queue is empty.
     pub fn run(&mut self);
 
     /// Run until simulated time reaches `until`.
     pub fn run_until(&mut self, until: f64);
 
-    /// Create a timeout event that resolves after `delay` simulated time units.
+    /// Create a timeout event. Convenience wrapper around `EnvHandle::timeout`.
     pub fn timeout(&self, delay: f64) -> Timeout;
 
-    /// Create an event that can be triggered externally by another process.
+    /// Create a paired event handle. Convenience wrapper around `EnvHandle::event`.
     pub fn event(&self) -> (EventTrigger, EventAwaitable);
+}
+
+#[derive(Clone)]
+pub struct EnvHandle { /* opaque */ }
+
+impl EnvHandle {
+    /// Current simulation time.
+    pub fn now(&self) -> f64;
+
+    /// Create a `Timeout` that resolves after `delay` simulated time units.
+    pub fn timeout(&self, delay: f64) -> Timeout;
+
+    /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
+    pub fn event(&self) -> (EventTrigger, EventAwaitable);
+
+    /// Spawn a child process from within a running process.
+    pub fn spawn<F: Future<Output = ()> + 'static>(&self, future: F);
+
+    /// Borrow the shared RNG. The returned guard implements `RngCore`.
+    /// Must not be held across an `.await` point.
+    pub fn rng(&self) -> impl RngCore + '_;
 }
 ```
 
 ### 4.3 Process Model
 
-A process is any `async fn` (or `async` block) that accepts a reference or handle to the environment.
-Processes interact with the simulation by awaiting simulation primitives.
+A process is any `async fn` or `async` block that receives an `EnvHandle`. Processes interact with the
+simulation by awaiting simulation primitives.
 
 ```rust
 async fn patient_journey(env: EnvHandle, resources: HospitalResources) {
@@ -119,8 +142,9 @@ async fn patient_journey(env: EnvHandle, resources: HospitalResources) {
     // Request a doctor
     let _doctor = resources.doctors.request().await;
 
-    // Treatment duration sampled from distribution
-    let duration = resources.rng().sample(Exp::new(1.0 / 45.0).unwrap());
+    // Treatment duration sampled from distribution.
+    // RNG must be sampled before the .await — the guard cannot cross an await point.
+    let duration = env.rng().sample(Exp::new(1.0 / 45.0).unwrap());
     env.timeout(duration).await;
 
     // Resources released automatically when guards are dropped
@@ -129,17 +153,18 @@ async fn patient_journey(env: EnvHandle, resources: HospitalResources) {
 
 Key design choices:
 - Processes are spawned with `env.spawn(future)` and run lazily by the scheduler.
-- Process handles (`ProcessHandle`) allow one process to wait for another to finish (post-MVP).
+- `EnvHandle` is `Clone` — processes clone it rather than borrowing.
 - Panicking inside a process terminates that process and propagates as a simulation error.
+- Process handles (`ProcessHandle`) allowing one process to join another are post-MVP.
 
 ### 4.4 Event Model (MVP)
 
 Two event types are supported in the MVP:
 
-| Event type      | Description                                                     |
-|-----------------|-----------------------------------------------------------------|
-| `Timeout`       | Resolves when sim time advances by `delay` units                |
-| `EventAwaitable`| Resolves when explicitly triggered via its paired `EventTrigger` |
+| Event type       | Description                                                      |
+|------------------|------------------------------------------------------------------|
+| `Timeout`        | Resolves when sim time advances by `delay` units                 |
+| `EventAwaitable` | Resolves when explicitly triggered via its paired `EventTrigger` |
 
 Both implement `Future<Output = ()>` and can be directly `.await`ed inside a process.
 
@@ -151,10 +176,18 @@ env.timeout(10.0).await;
 let (trigger, awaitable) = env.event();
 env.spawn(async move {
     env.timeout(5.0).await;
-    trigger.fire();  // wake the waiter at sim time 5
+    trigger.fire();  // consumes trigger; wakes all current and future waiters
 });
 awaitable.await;
 ```
+
+**Multi-waiter support:** `EventAwaitable` is `Clone`. Multiple processes can await the same event;
+all are woken when `trigger.fire()` is called.
+
+**Fire-before-await latch:** If `trigger.fire()` is called before any process awaits the event, the
+`fired` flag is set. Any subsequent `.await` on the awaitable resolves immediately without suspending.
+
+**`EventTrigger::fire` consumes `self`** — a trigger can only be fired once.
 
 **Post-MVP additions:** `AnyOf`, `AllOf` combinators; `Interrupt` (preemption); `Condition`.
 
@@ -163,12 +196,15 @@ awaitable.await;
 A `Resource` models a pool of identical, limited-capacity units (e.g., hospital beds).
 
 ```rust
-pub struct Resource { /* opaque */ }
+pub struct Resource { /* opaque, Clone */ }
 
 impl Resource {
+    /// # Panics
+    /// Panics if `capacity` is zero.
     pub fn new(capacity: usize) -> Self;
 
     /// Request one unit. Suspends the calling process if none are available (FIFO).
+    /// Returns a guard that releases the unit when dropped.
     pub fn request(&self) -> ResourceRequest;
 
     /// Current number of units in use.
@@ -184,12 +220,26 @@ Acquisition is RAII: the returned `ResourceGuard` releases the unit when dropped
 ```rust
 let guard = resource.request().await;  // waits if at capacity
 // use resource ...
-drop(guard);  // unit is released; next waiter is woken
+drop(guard);  // unit is released; next waiter is woken (FIFO)
 ```
 
-Resource ownership: resources are typically created outside the environment and passed into processes
-via `Arc` (since multiple processes share them, but still within one thread — `Arc<Resource>` without
-`Mutex` is safe given the single-threaded executor).
+**Resource ownership:** `Resource` wraps `Rc<RefCell<ResourceState>>` internally and implements
+`Clone`. All clones share the same pool. There is no need for `Arc` or `Mutex` because the executor
+is single-threaded. Resources are created outside `SimEnv` and shared across processes by cloning:
+
+```rust
+let machine = Resource::new(1);
+
+for _ in 0..3 {
+    let m = machine.clone();   // cheap Rc clone
+    env.spawn(async move {
+        let _guard = m.request().await;
+        // ...
+    });
+}
+```
+
+`Resource` is `!Send + !Sync` — consistent with `SimEnv`.
 
 **Post-MVP resource types:**
 
@@ -203,46 +253,61 @@ via `Arc` (since multiple processes share them, but still within one thread — 
 ### 4.6 Monte Carlo Parallelism
 
 Each simulation run is a pure function of its inputs (config + seed). Multiple runs are launched on
-OS threads. The recommended pattern:
+OS threads. The recommended pattern uses the built-in `monte_carlo::run` helper:
+
+```rust
+use simu::monte_carlo;
+
+let results = monte_carlo::run(0..10, |seed| {
+    let mut env = SimEnv::with_seed(seed);
+    // ... build and run simulation ...
+    env.run();
+    env.now()
+});
+// results[i] corresponds to seed i
+```
+
+`monte_carlo::run` wraps the closure in an `Arc`, spawns one `std::thread` per seed, and collects
+results in seed order. Because `SimEnv` is created *inside* each closure, it never crosses thread
+boundaries and its `!Send` nature is not a problem.
+
+For finer control, threads can be managed manually:
 
 ```rust
 use std::thread;
 
-let handles: Vec<_> = configs
-    .into_iter()
-    .enumerate()
-    .map(|(seed, config)| {
-        thread::spawn(move || run_simulation(seed as u64, config))
-    })
+let handles: Vec<_> = (0..10u64)
+    .map(|seed| thread::spawn(move || run_simulation(seed)))
     .collect();
 
-let results: Vec<SimResult> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
 ```
 
-Alternatively, `rayon::iter::IntoParallelIterator` can be used for automatic thread pool management.
-Both patterns are supported; `sim-rs` imposes no constraints on how the caller parallelises runs.
-
-**Requirement:** `SimEnv` must be constructible from a seed and must produce identical event sequences
-given the same seed and process logic.
+**Requirement:** `SimEnv` must produce identical event sequences given the same seed and process logic.
 
 ---
 
 ## 5. MVP Feature Set
 
-| Feature                            | Status |
-|------------------------------------|--------|
-| `SimEnv` with event queue          | MVP    |
-| `Timeout` event                    | MVP    |
-| Manual `Event` (trigger/await)     | MVP    |
-| `Resource` with FIFO queue         | MVP    |
-| RAII `ResourceGuard`               | MVP    |
-| `env.spawn(async_fn)`              | MVP    |
-| `env.run()` / `env.run_until()`    | MVP    |
-| Seeded RNG (via `rand` crate)      | MVP    |
-| Deterministic tie-breaking         | MVP    |
-| Monte Carlo via `std::thread`      | MVP    |
-| Hospital example (see §7)          | MVP    |
-| Unit tests for all core primitives | MVP    |
+All MVP features are implemented.
+
+| Feature                            | Status      |
+|------------------------------------|-------------|
+| `SimEnv` with event queue          | Done ✅     |
+| `Timeout` event                    | Done ✅     |
+| Manual `Event` (trigger/await)     | Done ✅     |
+| Multi-waiter event support         | Done ✅     |
+| Fire-before-await latch            | Done ✅     |
+| `Resource` with FIFO queue         | Done ✅     |
+| RAII `ResourceGuard`               | Done ✅     |
+| `env.spawn(async_fn)`              | Done ✅     |
+| `env.run()` / `env.run_until()`    | Done ✅     |
+| Seeded RNG (via `rand` crate)      | Done ✅     |
+| Deterministic tie-breaking         | Done ✅     |
+| Monte Carlo via `monte_carlo::run` | Done ✅     |
+| Hospital example (see §7)          | Done ✅     |
+| Integration test suite (25 tests)  | Done ✅     |
+| Criterion benchmark suite          | Done ✅     |
 
 ---
 
@@ -266,7 +331,7 @@ Listed in priority order:
 
 ---
 
-## 7. Example: Minimalistic Hospital Simulation
+## 7. Example: Hospital Simulation
 
 The bundled example (`examples/hospital.rs`) models:
 
@@ -293,19 +358,21 @@ The bundled example (`examples/hospital.rs`) models:
 8. Recovery on **live monitor** if critical (timeout ~ 60–120 min).
 9. Releases all resources; patient discharged.
 
-The example runs 10 parallel Monte Carlo simulations with different seeds, collects summary statistics
-(mean wait time per resource, throughput), and prints a comparison table.
+The example runs 10 parallel Monte Carlo simulations via `monte_carlo::run`. Each run writes output to
+a dedicated `hospital_run_<N>.log` file. After all runs complete, a summary table of mean wait times
+and patient throughput is printed to stdout.
 
 ---
 
 ## 8. Dependency Plan
 
-| Crate         | Purpose                                  | Feature flag |
-|---------------|------------------------------------------|--------------|
-| `rand`        | Seeded RNG, distributions                | required     |
-| `rand_distr`  | Exponential, Normal, Poisson, etc.       | required     |
-| `rayon`       | Optional parallel Monte Carlo helper     | `monte-carlo`|
-| `thiserror`   | Error types                              | required     |
+| Crate         | Purpose                                  | Type            |
+|---------------|------------------------------------------|-----------------|
+| `rand`        | Seeded RNG, `RngCore` trait              | required        |
+| `rand_distr`  | Exponential, Normal, Poisson, etc.       | required        |
+| `rayon`       | Optional parallel Monte Carlo helper     | optional (`monte-carlo` feature) |
+| `thiserror`   | Error types                              | required        |
+| `criterion`   | Statistical benchmark harness            | dev-dependency  |
 
 No async runtime dependency (tokio, async-std) — the custom executor is self-contained.
 

@@ -1,0 +1,159 @@
+# Test Strategy
+
+## Running the tests
+
+```bash
+cargo test                   # all tests
+cargo test --test timeout    # timeout tests only
+cargo test --test event      # event tests only
+cargo test --test resource   # resource tests only
+cargo test --test system     # system tests only
+```
+
+## Running the benchmarks
+
+```bash
+cargo bench                                    # all benchmark groups
+cargo bench -- timeout_throughput              # one group only
+cargo bench -- --save-baseline main            # save current results as baseline
+cargo bench -- --baseline main                 # compare against saved baseline
+cargo bench -- --output-format bencher         # machine-readable output for CI
+```
+
+HTML reports are written to `target/criterion/`.
+
+## Checking test coverage
+
+Coverage requires `cargo-llvm-cov` and the `llvm-tools` rustup component:
+
+```bash
+# One-time setup
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov
+
+# Summary (one line per file)
+cargo llvm-cov --summary-only
+
+# Annotated source (shows hit counts per line)
+cargo llvm-cov --text
+
+# HTML report (opens in browser)
+cargo llvm-cov --open
+```
+
+Current coverage: **98.6% lines / 97.7% regions** across all library source files.
+
+| File | Line coverage |
+|---|---|
+| `timeout.rs` | 100% |
+| `executor/mod.rs` | 100% |
+| `executor/waker.rs` | 100% |
+| `event.rs` | 100% |
+| `resource/mod.rs` | 100% |
+| `monte_carlo.rs` | 100% |
+| `env.rs` | 99% |
+| `executor/queue.rs` | 90% |
+
+The remaining gap in `executor/queue.rs` is the noop-waker vtable callbacks
+(`clone`, `wake`, `drop`) inside the `#[cfg(test)]` block — test infrastructure
+that is intentionally never invoked.
+
+## Structure
+
+All tests live in `tests/` and use Rust's native integration test harness.
+No mocking — every test drives real `SimEnv` instances.
+
+Shared idiom for capturing process output:
+
+```rust
+type Log = Rc<RefCell<Vec<String>>>;
+fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }
+```
+
+All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility.
+
+## Test files
+
+### tests/timeout.rs — 8 tests
+
+| Test | What it verifies |
+|---|---|
+| `single_timeout_advances_time` | `env.now()` advances correctly after a timeout |
+| `multiple_timeouts_fire_in_time_order` | Events fire in time order, not spawn order |
+| `run_until_stops_at_boundary` | `run_until(t)` stops at `t`, pending events beyond `t` do not fire |
+| `zero_delay_timeout` | `timeout(0.0)` still enters the queue; process completes with `env.now() == 0.0` |
+| `deterministic_tie_breaking` | Two processes with equal delay complete in spawn order (via `seq_counter`) |
+| `simenv_new_creates_valid_env` | `SimEnv::new()` (entropy-seeded) produces a usable environment |
+| `simenv_timeout_method` | `timeout()` called directly on `SimEnv` (not via `EnvHandle`) |
+| `rng_guard_covers_all_rngcore_methods` | `next_u32`, `fill_bytes`, `try_fill_bytes` all delegate correctly |
+
+### tests/event.rs — 5 tests
+
+| Test | What it verifies |
+|---|---|
+| `basic_fire_and_wake` | Waiter wakes at the correct time when trigger fires |
+| `fire_before_await_resolves_immediately` | `fired` latch: awaitable resolves without suspending if already fired |
+| `multi_waiter_all_wake` | All waiters are woken simultaneously when trigger fires (`waiters.drain(..)`) |
+| `clone_shares_underlying_event` | Cloned `EventAwaitable` shares the same `Rc<RefCell<EventState>>` |
+| `envhandle_event_method` | `event()` called directly on `EnvHandle` (not via `SimEnv`) |
+
+### tests/resource.rs — 6 tests
+
+| Test | What it verifies |
+|---|---|
+| `acquire_when_capacity_available` | Process acquires without suspending when capacity is free |
+| `block_and_wake_on_drop` | Waiter unblocks exactly when the guard is dropped |
+| `fifo_ordering_three_waiters` | Waiters are served in spawn order (`VecDeque` push_back/pop_front) |
+| `guard_drop_releases_exactly_one` | Dropping a guard wakes exactly one waiter, not all |
+| `in_use_and_capacity_counters` | `in_use()` and `capacity()` return correct values throughout the lifecycle |
+| `zero_capacity_panics` | `Resource::new(0)` panics with the expected message |
+
+### tests/system.rs — 3 tests
+
+Scenario: **Job Shop with Quality Gate** — a machine (`Resource`, capacity 1) and a
+quality gate (`EventTrigger`/`EventAwaitable`). No job may start until the inspector
+fires the gate at t=3. Three jobs then queue for the machine sequentially.
+
+| Test | What it verifies |
+|---|---|
+| `test_system_all_primitives` | Exact event trace with fixed durations: `["gate:3", "job1_done:5", "job2_done:7", "job3_done:9"]`, `env.now() == 9.0` |
+| `test_system_determinism` | Same seed → identical trace; different seed → different trace (RNG-driven durations) |
+| `monte_carlo_run` | `monte_carlo::run` spawns one thread per seed, returns results in seed order |
+
+### src/executor/queue.rs — 3 inline unit tests
+
+Inline `#[cfg(test)]` module testing `ScheduledWaker`'s `PartialEq` implementation,
+which cannot be reached from integration tests (the type is `pub(crate)`).
+
+| Test | What it verifies |
+|---|---|
+| `partial_eq_same_time_and_seq` | Equal time and seq → equal |
+| `partial_eq_different_seq` | Same time, different seq → not equal |
+| `partial_eq_different_time` | Different time → not equal |
+
+## Benchmark groups (benches/simulation.rs)
+
+All benchmarks use `SimEnv::with_seed(0)` — fully deterministic, no file I/O.
+N values are the parameterized workload sizes passed to `BenchmarkId`.
+
+| Group | What it measures | N values |
+|---|---|---|
+| `timeout_throughput` | Raw event-queue + executor throughput (BinaryHeap push/pop, RefCell borrows, waker path) | 1 000 / 10 000 / 100 000 |
+| `resource_contention` | `ResourceRequest` waker registration, `VecDeque` push/pop, `ResourceGuard::Drop` wake chain | 100 / 1 000 / 10 000 |
+| `event_broadcast` | `EventAwaitable` waker registration and `waiters.drain(..)` dispatch when all N wake simultaneously | 100 / 1 000 / 10 000 |
+| `mixed_workload` | End-to-end throughput combining spawn, timeouts, and two resources (nurse cap=1, beds cap=3) | 100 / 1 000 / 10 000 |
+| `monte_carlo_scaling` | Parallelism efficiency: K independent copies of `mixed_workload(100)` via `monte_carlo::run` | 1 / 2 / 4 / 8 threads |
+
+## Key implementation notes
+
+- **Sequential process execution within a tick**: the executor runs each process
+  to its next suspension point before moving to the next. A guard acquired and
+  immediately dropped in one process is gone before the next process runs in the
+  same tick. Tests that require two guards to be held simultaneously must yield
+  (e.g. via `timeout`) before dropping.
+- **Zero-delay timeouts**: `timeout(0.0)` always returns `Pending` on the first
+  poll and re-enters the event queue, even though the deadline equals the current
+  time. It fires on the next event-loop iteration, not synchronously.
+- **RNG sampling before async blocks**: `env.rng()` returns a `RefMut` guard that
+  cannot be held across an `.await`. Sample values before the `async move` block
+  and move the sampled value in.

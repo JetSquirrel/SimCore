@@ -33,3 +33,34 @@ impl Ord for ScheduledWaker {
             .then(self.seq.cmp(&other.seq))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::task::{RawWaker, RawWakerVTable, Waker};
+
+    fn noop_waker() -> Waker {
+        const VTABLE: RawWakerVTable =
+            RawWakerVTable::new(|p| RawWaker::new(p, &VTABLE), |_| {}, |_| {}, |_| {});
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    }
+
+    fn make(time: f64, seq: u64) -> ScheduledWaker {
+        ScheduledWaker { time, seq, waker: noop_waker() }
+    }
+
+    #[test]
+    fn partial_eq_same_time_and_seq() {
+        assert!(make(1.0, 0) == make(1.0, 0));
+    }
+
+    #[test]
+    fn partial_eq_different_seq() {
+        assert!(make(1.0, 0) != make(1.0, 1));
+    }
+
+    #[test]
+    fn partial_eq_different_time() {
+        assert!(make(1.0, 0) != make(2.0, 0));
+    }
+}

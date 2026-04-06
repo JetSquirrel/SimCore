@@ -9,7 +9,31 @@ A Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy b
 - Reproducible results via seeded RNG
 - Monte Carlo parallelism across independent simulation runs using OS threads
 
-For full technical details — architecture, API design, resource model, and roadmap — see [SPEC.md](SPEC.md).
+For full technical details — architecture, API design, resource model, and roadmap — see [SPEC.md](SPEC.md).  
+For the implementation roadmap and feature status — see [PLAN.md](PLAN.md).  
+For test strategy, coverage, and benchmark groups — see [TESTING.md](TESTING.md).
+
+## Quick start
+
+```rust
+use simu::env::SimEnv;
+use simu::Resource;
+
+let mut env = SimEnv::with_seed(42);
+let machine = Resource::new(1);
+
+for i in 1..=3_u32 {
+    let h = env.handle();
+    let m = machine.clone();
+    env.spawn(async move {
+        let _guard = m.request().await;   // queue for machine
+        h.timeout(2.0).await;             // hold for 2 time units
+        println!("job {} done at {}", i, h.now());
+    });
+}
+
+env.run();  // prints: job 1 done at 2, job 2 done at 4, job 3 done at 6
+```
 
 ## Usage
 
@@ -27,6 +51,16 @@ Enable parallel Monte Carlo support with the optional feature flag:
 simu = { path = ".", features = ["monte-carlo"] }
 ```
 
+## Core primitives
+
+| Type | Description |
+|---|---|
+| `SimEnv` | Central coordinator: owns event queue, current time, processes, and seeded RNG |
+| `EnvHandle` | Cloneable handle passed into processes; provides `timeout`, `event`, `rng`, `now` |
+| `Timeout` | Future that resolves after a simulated delay (`h.timeout(5.0).await`) |
+| `EventTrigger` / `EventAwaitable` | Paired handles for manual inter-process signalling |
+| `Resource` / `ResourceGuard` | FIFO capacity-limited pool; RAII release on guard drop |
+
 ## Building
 
 ```bash
@@ -40,11 +74,34 @@ cargo test                  # run all tests
 cargo test <test_name>      # run a single test
 ```
 
+See [TESTING.md](TESTING.md) for the full test strategy, coverage report, and benchmark guide.
+
+## Benchmarks
+
+```bash
+cargo bench                              # all benchmark groups
+cargo bench -- timeout_throughput        # one group only
+cargo bench -- --save-baseline main      # save baseline
+cargo bench -- --baseline main           # compare against baseline
+```
+
+HTML reports are written to `target/criterion/`. Five benchmark groups cover executor
+throughput, resource contention, event broadcast, mixed workload, and Monte Carlo scaling.
+
+## Linting
+
+```bash
+cargo clippy -- -D warnings
+```
+
 ## Examples
 
 ```bash
 cargo run --example hospital
 ```
+
+The hospital example runs 10 parallel Monte Carlo simulations, writes per-run logs to
+`hospital_run_<N>.log`, and prints a summary table of patient throughput and wait times.
 
 ## License
 

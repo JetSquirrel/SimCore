@@ -3,7 +3,12 @@
     "allow": [
       "Bash(cargo build:*)",
       "Bash(cargo run:*)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo llvm-cov:*)",
+      "Bash(cargo tarpaulin:*)",
+      "Bash(grep -v \"^$\")",
+      "Bash(cargo bench:*)"
     ]
   }
 }
