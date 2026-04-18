@@ -165,6 +165,33 @@ Race and barrier combinators: `AnyOf` resolves when the first sub-future fires;
 
 ---
 
+---
+
+## Step 10: Container ✅
+
+Continuous-quantity resource: a reservoir with `level: f64` and `capacity: f64`.
+Both `put(amount)` and `get(amount)` are suspendable futures (FIFO queues).
+Level changes are committed eagerly by the wake cascade via an `Rc<Cell<bool>>`
+done-flag shared between the future and its waiter entry.
+
+**Files:**
+- `src/resource/container.rs` — `Container`, `ContainerPutRequest`, `ContainerGetRequest`,
+  `ContainerState`, `GetWaiter`/`PutWaiter`, `wake_get_waiters`, `wake_put_waiters`, `trigger_cascade`
+- `src/resource/mod.rs` — added `pub mod container` + re-exports
+- `src/lib.rs` — re-exported `Container`, `ContainerGetRequest`, `ContainerPutRequest`
+- `tests/container.rs` — 11 integration tests
+- `examples/hospital.rs` — blood bank sub-scenario (Container with restocking process)
+
+**Design:**
+- `put` blocks when `level + amount > capacity`; `get` blocks when `level < amount`
+- FIFO `VecDeque` for both get and put waiter queues
+- `Rc<Cell<bool>>` done-flag: cascade commits level change and sets flag before waking,
+  so re-polled future returns `Ready` without rechecking level (preserves FIFO)
+- `trigger_cascade` loops `wake_get_waiters`/`wake_put_waiters` until stable (handles
+  cascading chains where a put immediately enables a get enables another put, etc.)
+
+---
+
 ## Post-MVP Roadmap
 
 Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
@@ -174,6 +201,5 @@ Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
 3. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
 4. **Event recording and replay** — log all events with timestamps for deterministic debugging.
 5. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
-6. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
-7. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-8. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+6. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+7. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.

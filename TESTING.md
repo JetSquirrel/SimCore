@@ -41,7 +41,7 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (39 integration tests + 3 inline unit tests).
+Current coverage: **~98% lines** across all library source files (50 integration tests + 3 inline unit tests).
 
 | File | Line coverage |
 |---|---|
@@ -138,6 +138,22 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `all_of_two_events` | `all_of![event_a, event_b]`; A fires at t=3, B fires at t=7 | Resolves at t=7 |
 | `all_of_empty_resolves_immediately` | `AllOf::new(vec![])` | Resolves at t=0 without suspending |
 | `all_of_mixed_timeout_and_event` | `all_of![timeout(5.0), signal]`; signal fires at t=8 | Resolves at t=8 |
+
+### tests/container.rs — 11 tests
+
+| Test | What it verifies |
+|---|---|
+| `get_immediate_when_level_sufficient` | `get` resolves without suspending when level ≥ amount |
+| `put_immediate_when_space_available` | `put` resolves without suspending when space available |
+| `get_blocks_then_wakes_on_put` | `get` suspends; wakes exactly when a `put` makes level sufficient |
+| `put_blocks_then_wakes_on_get` | `put` suspends when full; wakes when a `get` frees space |
+| `fifo_ordering_for_get_waiters` | Three blocked `get`s served in spawn order as `put`s trickle in |
+| `fifo_ordering_for_put_waiters` | Three blocked `put`s (full container) served in spawn order |
+| `cascade_satisfies_multiple_gets` | One large `put` wakes multiple pending `get`s in one cascade pass |
+| `level_and_capacity_accessors` | `level()`/`capacity()` return correct values before/after operations |
+| `zero_capacity_panics` | `Container::new(0.0, 0.0)` panics |
+| `negative_capacity_panics` | `Container::new(-1.0, 0.0)` panics |
+| `initial_level_exceeds_capacity_panics` | `Container::new(5.0, 6.0)` panics |
 
 ### tests/system.rs — 3 tests
 

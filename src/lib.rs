@@ -9,5 +9,6 @@ pub mod timeout;
 pub use combinator::{AllOf, AnyOf};
 pub use resource::{Resource, ResourceGuard, ResourceRequest};
 pub use resource::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
+pub use resource::{Container, ContainerGetRequest, ContainerPutRequest};
 
 mod executor;

@@ -279,12 +279,39 @@ let nurse = PriorityResource::new(1);
 let _guard = nurse.request(triage_level).await;
 ```
 
-**Post-MVP resource types:**
+**`Container`** models a reservoir of continuous quantity (e.g., blood supply, fuel):
+
+```rust
+pub struct Container { /* Clone, !Send+!Sync */ }
+
+impl Container {
+    /// Create empty container. Panics if capacity <= 0.
+    pub fn empty(capacity: f64) -> Self;
+
+    /// Create with initial level. Panics if capacity <= 0, initial_level < 0,
+    /// or initial_level > capacity.
+    pub fn new(capacity: f64, initial_level: f64) -> Self;
+
+    pub fn level(&self) -> f64;
+    pub fn capacity(&self) -> f64;
+
+    /// Add `amount`. Suspends if level + amount > capacity. Panics if amount <= 0.
+    pub fn put(&self, amount: f64) -> ContainerPutRequest;
+
+    /// Remove `amount`. Suspends if level < amount. Panics if amount <= 0.
+    pub fn get(&self, amount: f64) -> ContainerGetRequest;
+}
+```
+
+Both `put` and `get` suspend when they cannot immediately complete. Waiters are
+served **FIFO**. The level change is committed eagerly by the wake cascade (not
+on re-poll), so processes always see the correct level after `.await`.
+
+**Remaining post-MVP resource types:**
 
 | Type                  | Status   |
 |-----------------------|----------|
 | `PreemptiveResource`  | Post-MVP |
-| `Container`           | Post-MVP |
 | `Store` / `FilterStore` | Post-MVP |
 
 ### 4.6 Monte Carlo Parallelism
@@ -346,7 +373,8 @@ All MVP features are implemented.
 | `PriorityResource` with priority heap | Done ✅  |
 | `AnyOf` / `AllOf` combinators      | Done ✅     |
 | `any_of!` / `all_of!` macros       | Done ✅     |
-| Integration test suite (39 tests)  | Done ✅     |
+| `Container` (continuous quantity)  | Done ✅     |
+| Integration test suite (50 tests)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
@@ -361,9 +389,8 @@ Listed in priority order:
 4. **Event recording and replay** — log all events with timestamps; replay for deterministic debugging
    and regression testing.
 5. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
-6. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
-7. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-8. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
+6. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+7. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
    only when process logic can be expressed as data-parallel kernels (e.g., pure queuing networks).
    Requires further design work; depends on CUDA Rust bindings maturity.
 

@@ -1,0 +1,274 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use simu::env::SimEnv;
+use simu::Container;
+
+type Log = Rc<RefCell<Vec<String>>>;
+fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }
+
+// ---------------------------------------------------------------------------
+// Immediate resolution
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_immediate_when_level_sufficient() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    let c = Container::new(10.0, 5.0);
+    let log = new_log();
+
+    {
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(3.0).await;
+            log.borrow_mut().push(format!("level:{}", c.level()));
+        });
+    }
+
+    env.run();
+    assert_eq!(*log.borrow(), vec!["level:2"]);
+    // Time should be 0 — no suspension occurred.
+    assert_eq!(h.now(), 0.0);
+}
+
+#[test]
+fn put_immediate_when_space_available() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    let c = Container::empty(10.0);
+    let log = new_log();
+
+    {
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.put(4.0).await;
+            log.borrow_mut().push(format!("level:{}", c.level()));
+        });
+    }
+
+    env.run();
+    assert_eq!(*log.borrow(), vec!["level:4"]);
+    assert_eq!(h.now(), 0.0);
+}
+
+// ---------------------------------------------------------------------------
+// Blocking and waking
+// ---------------------------------------------------------------------------
+
+#[test]
+fn get_blocks_then_wakes_on_put() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::empty(10.0);
+    let log = new_log();
+
+    // Process A: wait 5 time units, then put 3.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(5.0).await;
+            c.put(3.0).await;
+        });
+    }
+
+    // Process B: immediately try to get 3 — blocks until A's put.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(3.0).await;
+            log.borrow_mut().push(format!("B_got:{}", h.now()));
+        });
+    }
+
+    env.run();
+    assert_eq!(*log.borrow(), vec!["B_got:5"]);
+}
+
+#[test]
+fn put_blocks_then_wakes_on_get() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::new(5.0, 5.0); // starts full
+    let log = new_log();
+
+    // Process A: wait 3 time units, then get 2 (frees space).
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(3.0).await;
+            c.get(2.0).await;
+        });
+    }
+
+    // Process B: immediately try to put 2 — blocks until A's get.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.put(2.0).await;
+            log.borrow_mut().push(format!("B_put:{}", h.now()));
+        });
+    }
+
+    env.run();
+    assert_eq!(*log.borrow(), vec!["B_put:3"]);
+}
+
+// ---------------------------------------------------------------------------
+// FIFO ordering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fifo_ordering_for_get_waiters() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::empty(10.0);
+    let log = new_log();
+
+    // Three consumers each wanting 4 units — all block immediately (level=0).
+    for name in ["G1", "G2", "G3"] {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(4.0).await;
+            log.borrow_mut().push(format!("{}:{}", name, h.now()));
+        });
+    }
+
+    // Producer: supply one batch per time unit.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            for _ in 0..3 {
+                h.timeout(1.0).await;
+                c.put(4.0).await;
+            }
+        });
+    }
+
+    env.run();
+    assert_eq!(*log.borrow(), vec!["G1:1", "G2:2", "G3:3"]);
+}
+
+#[test]
+fn fifo_ordering_for_put_waiters() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::new(4.0, 4.0); // starts full
+    let log = new_log();
+
+    // Three producers each wanting to put 4 units — all block (no space).
+    for name in ["P1", "P2", "P3"] {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.put(4.0).await;
+            log.borrow_mut().push(format!("{}:{}", name, h.now()));
+        });
+    }
+
+    // Consumer: drain one batch per time unit.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            for _ in 0..3 {
+                h.timeout(1.0).await;
+                c.get(4.0).await;
+            }
+        });
+    }
+
+    env.run();
+    assert_eq!(*log.borrow(), vec!["P1:1", "P2:2", "P3:3"]);
+}
+
+// ---------------------------------------------------------------------------
+// Cascade
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cascade_satisfies_multiple_gets() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::empty(100.0);
+    let log = new_log();
+
+    // Four consumers each wanting 5 units — all block (level=0).
+    for i in 1..=4u32 {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(5.0).await;
+            log.borrow_mut().push(format!("G{}:{}", i, h.now()));
+        });
+    }
+
+    // One large put at t=1 supplies 20 units — should satisfy all four.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(1.0).await;
+            c.put(20.0).await;
+        });
+    }
+
+    env.run();
+
+    // All four gets resolve at t=1 (same cascade pass).
+    assert_eq!(*log.borrow(), vec!["G1:1", "G2:1", "G3:1", "G4:1"]);
+}
+
+// ---------------------------------------------------------------------------
+// Accessors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn level_and_capacity_accessors() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::new(10.0, 3.0);
+
+    assert_eq!(c.capacity(), 10.0);
+    assert_eq!(c.level(), 3.0);
+
+    {
+        let c = c.clone();
+        env.spawn(async move {
+            c.put(4.0).await; // level → 7
+            c.get(2.0).await; // level → 5
+        });
+    }
+
+    env.run();
+    assert_eq!(c.level(), 5.0);
+}
+
+// ---------------------------------------------------------------------------
+// Panic tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "capacity must be positive")]
+fn zero_capacity_panics() {
+    Container::new(0.0, 0.0);
+}
+
+#[test]
+#[should_panic(expected = "capacity must be positive")]
+fn negative_capacity_panics() {
+    Container::new(-1.0, 0.0);
+}
+
+#[test]
+#[should_panic(expected = "initial_level must not exceed capacity")]
+fn initial_level_exceeds_capacity_panics() {
+    Container::new(5.0, 6.0);
+}

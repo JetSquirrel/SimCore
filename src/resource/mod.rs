@@ -5,6 +5,9 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
+pub mod container;
+pub use container::{Container, ContainerGetRequest, ContainerPutRequest};
+
 mod preemptive;
 pub mod priority;
 pub use priority::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
