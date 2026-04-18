@@ -23,6 +23,7 @@ pub(crate) struct SimState {
     pub ready_queue: Arc<Mutex<Vec<usize>>>,
     pub next_process_id: usize,
     pub processes: HashMap<usize, Pin<Box<dyn Future<Output = ()>>>>,
+    #[allow(clippy::type_complexity)]
     pub pending_spawns: Vec<(usize, Pin<Box<dyn Future<Output = ()>>>)>,
 }
 

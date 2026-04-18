@@ -41,7 +41,7 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **98.6% lines / 97.7% regions** across all library source files.
+Current coverage: **~98% lines** across all library source files (31 integration tests + 3 inline unit tests).
 
 | File | Line coverage |
 |---|---|
@@ -107,6 +107,17 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `guard_drop_releases_exactly_one` | Dropping a guard wakes exactly one waiter, not all |
 | `in_use_and_capacity_counters` | `in_use()` and `capacity()` return correct values throughout the lifecycle |
 | `zero_capacity_panics` | `Resource::new(0)` panics with the expected message |
+
+### tests/priority_resource.rs — 6 tests
+
+| Test | What it verifies |
+|---|---|
+| `acquire_immediately` | Free capacity → resolves without suspending |
+| `higher_priority_served_first` | Priority 0 waiter woken before priority 1, even if priority 1 spawned first |
+| `fifo_within_same_priority` | Three waiters at the same priority level served in spawn order (`seq` counter) |
+| `guard_drop_releases_exactly_one` | `BinaryHeap::pop()` wakes only the top-priority waiter, not all |
+| `in_use_and_capacity_counters` | `in_use()` and `capacity()` track correctly throughout the lifecycle |
+| `zero_capacity_panics` | `PriorityResource::new(0)` panics with the expected message |
 
 ### tests/system.rs — 3 tests
 

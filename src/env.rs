@@ -3,7 +3,7 @@ use std::cmp::Reverse;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Waker};
 
 use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
@@ -31,6 +31,12 @@ pub struct SimEnv {
 pub struct EnvHandle {
     state: Rc<RefCell<SimState>>,
     rng: Rc<RefCell<StdRng>>,
+}
+
+impl Default for SimEnv {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SimEnv {
@@ -114,7 +120,7 @@ impl SimEnv {
                 state
                     .event_queue
                     .peek()
-                    .map_or(true, |Reverse(e)| e.time > until)
+                    .is_none_or(|Reverse(e)| e.time > until)
             };
 
             if should_stop {
@@ -178,7 +184,7 @@ impl SimEnv {
                     let waker = make_waker(id, Arc::clone(&ready_queue));
                     let mut cx = Context::from_waker(&waker);
 
-                    if let Poll::Pending = process.as_mut().poll(&mut cx) {
+                    if process.as_mut().poll(&mut cx).is_pending() {
                         self.state.borrow_mut().processes.insert(id, process);
                     }
 

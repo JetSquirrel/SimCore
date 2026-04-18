@@ -8,7 +8,8 @@
       "Bash(cargo llvm-cov:*)",
       "Bash(cargo tarpaulin:*)",
       "Bash(grep -v \"^$\")",
-      "Bash(cargo bench:*)"
+      "Bash(cargo bench:*)",
+      "Bash(cargo clippy:*)"
     ]
   }
 }

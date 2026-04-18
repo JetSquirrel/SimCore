@@ -6,7 +6,8 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 mod preemptive;
-mod priority;
+pub mod priority;
+pub use priority::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
 
 struct ResourceState {
     capacity: usize,

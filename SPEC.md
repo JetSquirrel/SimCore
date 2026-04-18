@@ -241,14 +241,36 @@ for _ in 0..3 {
 
 `Resource` is `!Send + !Sync` — consistent with `SimEnv`.
 
+**`PriorityResource`** is also available when priority scheduling is needed:
+
+```rust
+pub struct PriorityResource { /* Clone, !Send+!Sync */ }
+
+impl PriorityResource {
+    pub fn new(capacity: usize) -> Self;
+
+    /// Request one unit. Lower priority number = higher priority (0 is highest).
+    /// Within the same priority level, requests are served FIFO.
+    pub fn request(&self, priority: u32) -> PriorityResourceRequest;
+
+    pub fn in_use(&self) -> usize;
+    pub fn capacity(&self) -> usize;
+}
+```
+
+```rust
+let nurse = PriorityResource::new(1);
+// critical patients (priority 0) jump ahead of standard patients (priority 1)
+let _guard = nurse.request(triage_level).await;
+```
+
 **Post-MVP resource types:**
 
-| Type                  | Priority |
+| Type                  | Status   |
 |-----------------------|----------|
-| `PriorityResource`    | High     |
-| `PreemptiveResource`  | High     |
-| `Container`           | Low      |
-| `Store` / `FilterStore` | Low    |
+| `PreemptiveResource`  | Post-MVP |
+| `Container`           | Post-MVP |
+| `Store` / `FilterStore` | Post-MVP |
 
 ### 4.6 Monte Carlo Parallelism
 
@@ -306,7 +328,8 @@ All MVP features are implemented.
 | Deterministic tie-breaking         | Done ✅     |
 | Monte Carlo via `monte_carlo::run` | Done ✅     |
 | Hospital example (see §7)          | Done ✅     |
-| Integration test suite (25 tests)  | Done ✅     |
+| `PriorityResource` with priority heap | Done ✅  |
+| Integration test suite (31 tests)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
@@ -315,8 +338,7 @@ All MVP features are implemented.
 
 Listed in priority order:
 
-1. **`PriorityResource`** — request with priority level; higher priority jumps the queue.
-2. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
+1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
 3. **`AnyOf` / `AllOf` combinators** — wait for the first/all of a set of events.
 4. **`ProcessHandle`** — await the completion of a spawned process.
 5. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).

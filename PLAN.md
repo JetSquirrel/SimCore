@@ -121,17 +121,35 @@ HTML reports: `target/criterion/`. Baseline workflow: `--save-baseline main` the
 
 ---
 
+## Step 8: PriorityResource ✅
+
+Priority-ordered resource pool: lowest priority number served first; FIFO tie-breaking within the same priority level.
+
+**Files:**
+- `src/resource/priority.rs` — `PriorityResource`, `PriorityResourceRequest`, `PriorityResourceGuard`
+- `src/resource/mod.rs` — added `pub use priority::...`
+- `src/lib.rs` — re-exported `PriorityResource`, `PriorityResourceGuard`, `PriorityResourceRequest`
+- `tests/priority_resource.rs` — 6 tests
+- `examples/hospital.rs` — nurse changed to `PriorityResource`; patients get triage levels (critical=0, standard=1)
+
+**Design:**
+- `BinaryHeap<PriorityWaiter>` with reversed `Ord` so `pop()` yields the lowest `(priority, seq)` pair
+- `next_seq` counter in state for FIFO tie-breaking within the same priority level
+- `registered` + `seq` on the future — same double-registration guard as `ResourceRequest`
+- API: `r.request(priority: u32) -> PriorityResourceRequest` — priority always explicit at call site
+
+---
+
 ## Post-MVP Roadmap
 
 Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
 
-1. **`PriorityResource`** — request with priority level; higher priority jumps the queue.
-2. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-3. **`AnyOf` / `AllOf` combinators** — wait for the first/all of a set of events.
-4. **`ProcessHandle`** — await the completion of a spawned process.
-5. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-6. **Event recording and replay** — log all events with timestamps for deterministic debugging.
-7. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
-8. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
-9. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-10. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
+2. **`AnyOf` / `AllOf` combinators** — wait for the first/all of a set of events.
+3. **`ProcessHandle`** — await the completion of a spawned process.
+4. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+5. **Event recording and replay** — log all events with timestamps for deterministic debugging.
+6. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
+7. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
+8. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+9. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
