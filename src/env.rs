@@ -10,6 +10,7 @@ use rand::{RngCore, SeedableRng};
 
 use crate::event::{new_event, EventAwaitable, EventTrigger};
 use crate::executor::{make_waker, SimState};
+use crate::process::{spawn_with_handle, ProcessHandle};
 use crate::timeout::Timeout;
 
 /// The simulation environment. Central coordinator for a single simulation run.
@@ -76,8 +77,15 @@ impl SimEnv {
 
     /// Spawn a process. The future is queued and will be polled on the next
     /// executor iteration. May be called before or during `run()`.
-    pub fn spawn<F: Future<Output = ()> + 'static>(&self, future: F) {
-        self.handle().spawn(future);
+    ///
+    /// Returns a [`ProcessHandle`] that resolves to the process's output when
+    /// it finishes. Drop the handle to detach (fire-and-forget).
+    pub fn spawn<F>(&self, future: F) -> ProcessHandle<F::Output>
+    where
+        F: Future + 'static,
+        F::Output: 'static,
+    {
+        self.handle().spawn(future)
     }
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
@@ -226,10 +234,19 @@ impl EnvHandle {
     }
 
     /// Spawn a child process from within a running process.
-    pub fn spawn<F: Future<Output = ()> + 'static>(&self, future: F) {
+    ///
+    /// Returns a [`ProcessHandle`] that resolves to the process's output when
+    /// it finishes. Drop the handle to detach (fire-and-forget).
+    pub fn spawn<F>(&self, future: F) -> ProcessHandle<F::Output>
+    where
+        F: Future + 'static,
+        F::Output: 'static,
+    {
+        let (wrapped, handle) = spawn_with_handle(future);
         let mut state = self.state.borrow_mut();
         let id = state.alloc_process_id();
-        state.pending_spawns.push((id, Box::pin(future)));
+        state.pending_spawns.push((id, wrapped));
+        handle
     }
 
     /// Schedule a wakeup at `deadline` in the event queue.

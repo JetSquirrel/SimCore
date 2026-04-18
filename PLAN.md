@@ -191,14 +191,42 @@ done-flag shared between the future and its waiter entry.
 
 ---
 
+## Step 11: ProcessHandle ✅
+
+`spawn` now returns `ProcessHandle<F::Output>` — a tokio-`JoinHandle`-style
+future resolving to the process's return value. Enables return values from
+processes, process-level `any_of!`/`all_of!` composition, and observable
+completion.
+
+**Files:**
+- `src/process.rs` — `ProcessHandle<T>`, `ProcessSlot<T>`, `spawn_with_handle()`
+  factory, `discard()` adapter for combinators
+- `src/env.rs` — generalized `spawn` signatures (both `SimEnv` and `EnvHandle`)
+- `src/lib.rs` — `pub mod process;` and `pub use ProcessHandle`
+- `tests/process_handle.rs` — 9 integration tests
+- `examples/hospital.rs` — `arrivals` collects patient handles; on shift end,
+  `AllOf` joins them (with a hard `any_of` deadline) to log "ED clear" time
+
+**Design:**
+- Non-`Clone`, single-await — broadcast patterns use `EventTrigger`.
+- Completion via `async move` wrapper that stores result in
+  `Rc<RefCell<ProcessSlot<T>>>` and wakes a registered awaiter. No executor
+  changes — the process table stays `HashMap<_, Pin<Box<dyn Future<Output=()>>>>`.
+- Waker dedup via `Waker::will_wake` (same pattern as `EventAwaitable`).
+- Panic semantics unchanged: process panic crashes the sim.
+- Breaking change to `spawn` signature was source-compatible for every
+  existing callsite in tests, benches, and examples (the returned
+  `ProcessHandle<()>` is dropped at the statement boundary).
+
+---
+
 ## Post-MVP Roadmap
 
 Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
 
 1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-2. **`ProcessHandle`** — await the completion of a spawned process.
-3. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-4. **Event recording and replay** — log all events with timestamps for deterministic debugging.
-5. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
-6. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-7. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+2. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+3. **Event recording and replay** — log all events with timestamps for deterministic debugging.
+4. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
+5. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+6. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.

@@ -1,12 +1,14 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
+use std::future::Future;
 use std::io::Write;
+use std::pin::Pin;
 use std::rc::Rc;
 
 use rand::Rng;
 use rand_distr::Exp;
-use simu::{any_of, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
+use simu::{any_of, AllOf, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
 // Hospital simulation — demonstrates post-MVP features:
@@ -15,6 +17,9 @@ use simu::{any_of, Container, EnvHandle, EventTrigger, PriorityResource, Resourc
 //  • AnyOf             : treatment races against a personal eviction signal
 //  • Container         : blood bank — critical patients draw 10 units,
 //                        standard patients draw 2; restocked every 60 min
+//  • ProcessHandle     : arrivals collects each patient's handle; after the
+//                        shift ends, AllOf joins them so we can log the
+//                        exact simulated time the ED becomes empty.
 //
 // When a critical patient arrives and every bed is occupied, they fire the
 // eviction trigger of the longest-admitted standard patient, who then
@@ -55,6 +60,7 @@ struct Stats {
     total_nurse_wait:  f64,
     total_bed_wait:    f64,
     total_blood_wait:  f64,
+    ed_cleared_at:     f64,
 }
 
 #[derive(Clone)]
@@ -76,6 +82,7 @@ pub struct SimResult {
     pub mean_nurse_wait:  f64,
     pub mean_bed_wait:    f64,
     pub mean_blood_wait:  f64,
+    pub ed_cleared_at:    f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -96,10 +103,15 @@ async fn blood_bank_restock(env: EnvHandle, ctx: HospitalCtx) {
 }
 
 /// Arrival process: generates patients at Poisson inter-arrival times.
+///
+/// Collects every patient's `ProcessHandle<()>` and, after the shift ends,
+/// joins all of them with `AllOf` so the caller can record the exact
+/// simulated time the ED becomes empty.
 async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
     let arrivals_dist  = Exp::new(ARRIVAL_RATE).unwrap();
     let treatment_dist = Exp::new(1.0 / MEAN_TREATMENT).unwrap();
     let mut patient_id = 1_u32;
+    let mut patient_futs: Vec<Pin<Box<dyn Future<Output = ()>>>> = Vec::new();
 
     loop {
         let inter_arrival = env.rng().sample(arrivals_dist);
@@ -117,9 +129,24 @@ async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
         let is_critical = env.rng().gen::<f64>() < CRITICAL_PROB;
         let triage      = if is_critical { 0_u32 } else { 1_u32 };
 
-        env.spawn(patient(env.clone(), patient_id, triage, treatment, ctx.clone()));
+        let handle = env.spawn(
+            patient(env.clone(), patient_id, triage, treatment, ctx.clone()),
+        );
+        patient_futs.push(Box::pin(handle.discard()));
         patient_id += 1;
     }
+
+    // Wait for every patient to discharge, with a hard deadline so the
+    // simulation always terminates even if some patients get stuck waiting
+    // on a depleted blood bank (restocks stop after SIM_DURATION).
+    if !patient_futs.is_empty() {
+        let all_patients = AllOf::new(patient_futs);
+        any_of![all_patients, env.timeout(SIM_DURATION * 10.0)].await;
+    }
+    ctx.stats.borrow_mut().ed_cleared_at = env.now();
+    ctx.log.borrow_mut().push(format!(
+        "[t={:5.1}] ED clear marker", env.now(),
+    ));
 }
 
 /// A single patient: triage nurse → blood draw → bed → treatment (possibly early-discharged).
@@ -254,6 +281,7 @@ fn run_simulation(seed: u64) -> SimResult {
         mean_nurse_wait: if total > 0 { s.total_nurse_wait / total as f64 } else { 0.0 },
         mean_bed_wait:   if total > 0 { s.total_bed_wait   / total as f64 } else { 0.0 },
         mean_blood_wait: if total > 0 { s.total_blood_wait / total as f64 } else { 0.0 },
+        ed_cleared_at:   s.ed_cleared_at,
     }
 }
 
@@ -265,18 +293,20 @@ fn main() {
     let results = simu::monte_carlo::run(0..10, run_simulation);
 
     println!(
-        "{:>6}  {:>8}  {:>8}  {:>7}  {:>11}  {:>17}  {:>14}  {:>15}",
+        "{:>6}  {:>8}  {:>8}  {:>7}  {:>11}  {:>17}  {:>14}  {:>15}  {:>10}",
         "Seed", "Critical", "Standard", "Early", "Blood waits",
         "Nurse wait (mean)", "Bed wait (mean)", "Blood wait (mean)",
+        "ED clear",
     );
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(113));
 
     for r in &results {
         println!(
-            "{:>6}  {:>8}  {:>8}  {:>7}  {:>11}  {:>17.1}  {:>14.1}  {:>15.1}",
+            "{:>6}  {:>8}  {:>8}  {:>7}  {:>11}  {:>17.1}  {:>14.1}  {:>15.1}  {:>10.1}",
             r.seed, r.critical_treated, r.standard_treated, r.early_discharged,
             r.blood_bank_waits,
             r.mean_nurse_wait, r.mean_bed_wait, r.mean_blood_wait,
+            r.ed_cleared_at,
         );
     }
 
@@ -288,12 +318,13 @@ fn main() {
     let mean_nurse = results.iter().map(|r| r.mean_nurse_wait).sum::<f64>() / n;
     let mean_bed   = results.iter().map(|r| r.mean_bed_wait).sum::<f64>()   / n;
     let mean_blood = results.iter().map(|r| r.mean_blood_wait).sum::<f64>() / n;
+    let mean_clear = results.iter().map(|r| r.ed_cleared_at).sum::<f64>()   / n;
 
-    println!("{}", "-".repeat(100));
+    println!("{}", "-".repeat(113));
     println!(
-        "{:>6}  {:>8.1}  {:>8.1}  {:>7.1}  {:>11.1}  {:>17.1}  {:>14.1}  {:>15.1}",
+        "{:>6}  {:>8.1}  {:>8.1}  {:>7.1}  {:>11.1}  {:>17.1}  {:>14.1}  {:>15.1}  {:>10.1}",
         "mean", mean_crit, mean_std, mean_early, mean_bw,
-        mean_nurse, mean_bed, mean_blood,
+        mean_nurse, mean_bed, mean_blood, mean_clear,
     );
 
     println!("\nPer-run logs written to run_00.log … run_09.log");

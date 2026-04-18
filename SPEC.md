@@ -89,7 +89,8 @@ impl SimEnv {
     pub fn now(&self) -> f64;
 
     /// Spawn a new process into the simulation.
-    pub fn spawn<F: Future<Output = ()> + 'static>(&self, process: F);
+    pub fn spawn<F>(&self, process: F) -> ProcessHandle<F::Output>
+    where F: Future + 'static, F::Output: 'static;
 
     /// Run until the event queue is empty.
     pub fn run(&mut self);
@@ -118,7 +119,8 @@ impl EnvHandle {
     pub fn event(&self) -> (EventTrigger, EventAwaitable);
 
     /// Spawn a child process from within a running process.
-    pub fn spawn<F: Future<Output = ()> + 'static>(&self, future: F);
+    pub fn spawn<F>(&self, future: F) -> ProcessHandle<F::Output>
+    where F: Future + 'static, F::Output: 'static;
 
     /// Borrow the shared RNG. The returned guard implements `RngCore`.
     /// Must not be held across an `.await` point.
@@ -155,7 +157,10 @@ Key design choices:
 - Processes are spawned with `env.spawn(future)` and run lazily by the scheduler.
 - `EnvHandle` is `Clone` — processes clone it rather than borrowing.
 - Panicking inside a process terminates that process and propagates as a simulation error.
-- Process handles (`ProcessHandle`) allowing one process to join another are post-MVP.
+- `spawn` returns a [`ProcessHandle<T>`](#4-4-core-types) that resolves to the
+  process's return value. Dropping the handle detaches the process
+  (fire-and-forget). `ProcessHandle<T>` is not `Clone` — broadcast patterns
+  use [`EventTrigger`](#event) instead.
 
 ### 4.4 Event Model (MVP)
 
@@ -205,6 +210,46 @@ Both accept one or more expressions via macro (which auto-`Box::pin` each);
 `AnyOf::new(vec![])` panics, `AllOf::new(vec![])` resolves immediately.
 
 **Post-MVP additions:** `Interrupt` (preemption); `Condition`.
+
+#### ProcessHandle
+
+`spawn` returns a `ProcessHandle<T>` that is itself a `Future<Output = T>`.
+Awaiting the handle suspends the caller until the spawned process finishes,
+and yields its return value. Handles are **not `Clone`** — single-await,
+tokio-`JoinHandle`-style. Broadcast patterns should use `EventTrigger`.
+
+```rust
+pub struct ProcessHandle<T> { /* opaque, T: 'static */ }
+
+impl<T: 'static> Future for ProcessHandle<T> {
+    type Output = T;
+}
+
+impl<T: 'static> ProcessHandle<T> {
+    /// Await and discard the value — for use with `any_of!` / `all_of!`.
+    pub fn discard(self) -> impl Future<Output = ()> + 'static;
+}
+```
+
+Dropping the handle before awaiting **detaches** the process: it keeps
+running; its return value, if any, is dropped when the process completes.
+This matches `tokio::JoinHandle` semantics.
+
+Typical patterns:
+
+```rust
+// Return a value from a process
+let h = env.spawn(async { env.timeout(10.0).await; compute_result() });
+let result = h.await;
+
+// Join multiple child processes as a barrier
+let a = env.spawn(phase_a());
+let b = env.spawn(phase_b());
+all_of![a.discard(), b.discard()].await;
+
+// Fire-and-forget (idiomatic — just drop the returned handle)
+env.spawn(background_work());
+```
 
 ### 4.5 Resource Model (MVP)
 
@@ -423,7 +468,8 @@ All MVP features are implemented.
 | `AnyOf` / `AllOf` combinators      | Done ✅     |
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
-| Integration test suite (57 tests)  | Done ✅     |
+| `ProcessHandle<T>` (observable spawn) | Done ✅  |
+| Integration test suite (66 tests)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
@@ -433,7 +479,6 @@ All MVP features are implemented.
 Listed in priority order:
 
 1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-2. **`ProcessHandle`** — await the completion of a spawned process.
 3. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
 4. **Event recording and replay** — log all events with timestamps; replay for deterministic debugging
    and regression testing.

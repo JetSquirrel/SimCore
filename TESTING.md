@@ -41,7 +41,7 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (57 integration tests + 3 inline unit tests).
+Current coverage: **~98% lines** across all library source files (66 integration tests + 3 inline unit tests).
 
 | File | Line coverage |
 |---|---|
@@ -158,6 +158,23 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `zero_capacity_panics` | `Container::new(0.0, 0.0)` panics |
 | `negative_capacity_panics` | `Container::new(-1.0, 0.0)` panics |
 | `initial_level_exceeds_capacity_panics` | `Container::new(5.0, 6.0)` panics |
+
+### tests/process_handle.rs — 9 tests
+
+Covers the `ProcessHandle<T>` feature: `spawn` returning a handle, awaiting
+it, detaching via drop, composition with combinators, and nesting.
+
+| Test | What it verifies |
+|---|---|
+| `handle_returns_value` | `spawn(async { ...; T })` returns a handle whose `.await` yields `T` |
+| `await_before_completion` | Awaiter suspends until the spawned process finishes |
+| `await_after_completion` | If the child finished long ago, awaiting resolves in the same poll (no suspension) |
+| `handle_dropped_detaches_process` | Dropping the handle at t=0 does not stop the child; its side-effect runs |
+| `completed_unawaited_drops_value` | Handle drop after child completion runs `Drop` on the stored `T` (verified with a drop-counter) |
+| `all_of_on_handles` | `all_of![h1.discard(), h2.discard()]` waits for the slowest child |
+| `any_of_on_handles` | `any_of![h1.discard(), h2.discard()]` resolves when the first child finishes |
+| `nested_handle` | Inner process returns `ProcessHandle<u32>`; outer awaiter unwraps twice |
+| `handle_awaited_from_different_process` | A handle can be moved across processes and awaited from any of them |
 
 ### tests/dropped_awaitable.rs — 6 tests
 
