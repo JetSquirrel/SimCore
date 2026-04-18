@@ -6,15 +6,20 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 struct GetWaiter {
-    amount: f64,
-    waker:  Waker,
-    done:   Rc<Cell<bool>>,
+    amount:   f64,
+    waker:    Waker,
+    done:     Rc<Cell<bool>>,
+    /// Shared with the owning `ContainerGetRequest`. Set to `true` if the
+    /// future is dropped before being granted; the cascade skips canceled
+    /// entries so the level is not deducted for an abandoned request.
+    canceled: Rc<Cell<bool>>,
 }
 
 struct PutWaiter {
-    amount: f64,
-    waker:  Waker,
-    done:   Rc<Cell<bool>>,
+    amount:   f64,
+    waker:    Waker,
+    done:     Rc<Cell<bool>>,
+    canceled: Rc<Cell<bool>>,
 }
 
 struct ContainerState {
@@ -29,8 +34,13 @@ struct ContainerState {
 // ---------------------------------------------------------------------------
 
 /// Drain as many head-of-queue get waiters as current level allows (FIFO).
+/// Canceled entries (from abandoned requests) are skipped without touching level.
 fn wake_get_waiters(state: &mut ContainerState) {
     while let Some(front) = state.get_waiters.front() {
+        if front.canceled.get() {
+            state.get_waiters.pop_front();
+            continue;
+        }
         if state.level >= front.amount {
             let w = state.get_waiters.pop_front().unwrap();
             state.level -= w.amount;
@@ -43,8 +53,13 @@ fn wake_get_waiters(state: &mut ContainerState) {
 }
 
 /// Drain as many head-of-queue put waiters as available space allows (FIFO).
+/// Canceled entries are skipped without touching level.
 fn wake_put_waiters(state: &mut ContainerState) {
     while let Some(front) = state.put_waiters.front() {
+        if front.canceled.get() {
+            state.put_waiters.pop_front();
+            continue;
+        }
         if state.level + front.amount <= state.capacity {
             let w = state.put_waiters.pop_front().unwrap();
             state.level += w.amount;
@@ -147,6 +162,7 @@ impl Container {
             amount,
             registered: false,
             done:       Rc::new(Cell::new(false)),
+            canceled:   Rc::new(Cell::new(false)),
         }
     }
 
@@ -164,6 +180,7 @@ impl Container {
             amount,
             registered: false,
             done:       Rc::new(Cell::new(false)),
+            canceled:   Rc::new(Cell::new(false)),
         }
     }
 }
@@ -181,6 +198,10 @@ pub struct ContainerPutRequest {
     /// before calling `waker.wake()`, so the next poll can return `Ready`
     /// without re-checking the level.
     done:       Rc<Cell<bool>>,
+    /// Shared with the `PutWaiter` entry; the request's `Drop` impl sets this
+    /// to `true` if the future is abandoned before being granted, so the
+    /// cascade skips the entry without adding level.
+    canceled:   Rc<Cell<bool>>,
 }
 
 impl Future for ContainerPutRequest {
@@ -200,14 +221,25 @@ impl Future for ContainerPutRequest {
             }
             if !self.registered {
                 state.put_waiters.push_back(PutWaiter {
-                    amount: self.amount,
-                    waker:  cx.waker().clone(),
-                    done:   Rc::clone(&self.done),
+                    amount:   self.amount,
+                    waker:    cx.waker().clone(),
+                    done:     Rc::clone(&self.done),
+                    canceled: Rc::clone(&self.canceled),
                 });
             }
         }
         self.registered = true;
         Poll::Pending
+    }
+}
+
+impl Drop for ContainerPutRequest {
+    fn drop(&mut self) {
+        // If we registered but never completed (cascade would have set
+        // `done`), mark the queue entry canceled so the cascade skips it.
+        if self.registered && !self.done.get() {
+            self.canceled.set(true);
+        }
     }
 }
 
@@ -223,6 +255,10 @@ pub struct ContainerGetRequest {
     /// Shared with the `GetWaiter` entry; the cascade sets this to `true`
     /// before calling `waker.wake()`, so the next poll can return `Ready`.
     done:       Rc<Cell<bool>>,
+    /// Shared with the `GetWaiter` entry; the request's `Drop` impl sets this
+    /// to `true` if the future is abandoned before being granted, so the
+    /// cascade skips the entry without deducting level.
+    canceled:   Rc<Cell<bool>>,
 }
 
 impl Future for ContainerGetRequest {
@@ -244,13 +280,22 @@ impl Future for ContainerGetRequest {
             }
             if !self.registered {
                 state.get_waiters.push_back(GetWaiter {
-                    amount: self.amount,
-                    waker:  cx.waker().clone(),
-                    done:   Rc::clone(&self.done),
+                    amount:   self.amount,
+                    waker:    cx.waker().clone(),
+                    done:     Rc::clone(&self.done),
+                    canceled: Rc::clone(&self.canceled),
                 });
             }
         }
         self.registered = true;
         Poll::Pending
+    }
+}
+
+impl Drop for ContainerGetRequest {
+    fn drop(&mut self) {
+        if self.registered && !self.done.get() {
+            self.canceled.set(true);
+        }
     }
 }

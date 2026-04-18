@@ -6,9 +6,7 @@ use std::rc::Rc;
 
 use rand::Rng;
 use rand_distr::Exp;
-use simu::env::{EnvHandle, SimEnv};
-use simu::event::EventTrigger;
-use simu::{any_of, Container, PriorityResource, Resource};
+use simu::{any_of, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
 // Hospital simulation — demonstrates post-MVP features:
@@ -48,6 +46,7 @@ type Log = Rc<RefCell<Vec<String>>>;
 /// longest-admitted patient first (lowest id = earliest arrival).
 type EvictionMap = Rc<RefCell<BTreeMap<u32, EventTrigger>>>;
 
+#[derive(Default)]
 struct Stats {
     critical_treated:  u32,
     standard_treated:  u32,
@@ -88,23 +87,22 @@ async fn blood_bank_restock(env: EnvHandle, ctx: HospitalCtx) {
     loop {
         env.timeout(RESTOCK_INTERVAL).await;
         if env.now() > SIM_DURATION { break; }
-        let before = ctx.blood_bank.level();
         ctx.blood_bank.put(BLOOD_RESTOCK).await;
         ctx.log.borrow_mut().push(format!(
             "[t={:5.1}] Blood bank restocked +{:.0}  (level: {:.0}/{:.0})",
             env.now(), BLOOD_RESTOCK, ctx.blood_bank.level(), ctx.blood_bank.capacity(),
         ));
-        let _ = before; // suppress unused warning
     }
 }
 
 /// Arrival process: generates patients at Poisson inter-arrival times.
 async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
-    let exp = Exp::new(ARRIVAL_RATE).unwrap();
+    let arrivals_dist  = Exp::new(ARRIVAL_RATE).unwrap();
+    let treatment_dist = Exp::new(1.0 / MEAN_TREATMENT).unwrap();
     let mut patient_id = 1_u32;
 
     loop {
-        let inter_arrival = env.rng().sample(exp);
+        let inter_arrival = env.rng().sample(arrivals_dist);
         env.timeout(inter_arrival).await;
 
         if env.now() > SIM_DURATION {
@@ -115,7 +113,7 @@ async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
             break;
         }
 
-        let treatment   = env.rng().sample(Exp::new(1.0 / MEAN_TREATMENT).unwrap());
+        let treatment   = env.rng().sample(treatment_dist);
         let is_critical = env.rng().gen::<f64>() < CRITICAL_PROB;
         let triage      = if is_critical { 0_u32 } else { 1_u32 };
 
@@ -232,15 +230,7 @@ fn run_simulation(seed: u64) -> SimResult {
         blood_bank:   Container::new(BLOOD_CAPACITY, BLOOD_INITIAL),
         eviction_map: Rc::new(RefCell::new(BTreeMap::new())),
         log:          Rc::new(RefCell::new(Vec::new())),
-        stats:        Rc::new(RefCell::new(Stats {
-            critical_treated: 0,
-            standard_treated: 0,
-            early_discharged: 0,
-            blood_bank_waits: 0,
-            total_nurse_wait: 0.0,
-            total_bed_wait:   0.0,
-            total_blood_wait: 0.0,
-        })),
+        stats:        Rc::new(RefCell::new(Stats::default())),
     };
 
     env.spawn(blood_bank_restock(h.clone(), ctx.clone()));

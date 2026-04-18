@@ -14,7 +14,6 @@ The foundational heartbeat of the library.
 - `src/executor/mod.rs` — event loop that drives future polling
 - `src/env.rs` — `SimEnv`: `spawn()`, `run()`, `run_until()`, `now()`, `timeout()`; `EnvHandle` for use inside processes
 - `src/timeout.rs` — `Timeout` future
-- `src/error.rs` — `SimError`
 
 **Hospital example:** a handful of patients arrive at fixed intervals, each sleeping for a fixed treatment duration, printing their discharge time.
 

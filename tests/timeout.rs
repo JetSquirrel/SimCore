@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use rand::RngCore;
 use simu::env::SimEnv;
+use simu::{all_of, any_of};
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }
@@ -144,6 +145,52 @@ fn simenv_timeout_method() {
     env.run();
 
     assert_eq!(*log.borrow(), vec!["5"]);
+}
+
+/// Regression test: once a Timeout has been polled and scheduled, polling it
+/// again BEFORE its deadline must still return Pending (not Ready).
+///
+/// This path is exercised by `all_of!`, which re-polls every sub-future each
+/// time any one of them fires. Previously `Timeout::poll` returned `Ready`
+/// whenever its `scheduled` flag was set, which caused `all_of!` to resolve
+/// at the earliest sub-deadline instead of the latest one.
+#[test]
+fn timeout_repoll_before_deadline_returns_pending() {
+    // If the bug existed, this AllOf would resolve at t=1 (the short timeout's
+    // re-poll would spuriously return Ready). With the fix it must wait until
+    // t=5 — the longest deadline.
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    let log = new_log();
+    let log2 = log.clone();
+    env.spawn(async move {
+        all_of![h.timeout(1.0), h.timeout(3.0), h.timeout(5.0)].await;
+        log2.borrow_mut().push(format!("done:{}", h.now()));
+    });
+    env.run();
+    assert_eq!(env.now(), 5.0);
+    assert_eq!(*log.borrow(), vec!["done:5"]);
+}
+
+/// Regression test: `any_of!` must also return Pending for unfired sub-timeouts
+/// on the initial poll pass. Every sub-future's first poll schedules a wakeup,
+/// and none should claim it has already fired.
+#[test]
+fn any_of_first_pass_all_pending() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    let log = new_log();
+    let log2 = log.clone();
+    env.spawn(async move {
+        any_of![h.timeout(3.0), h.timeout(5.0), h.timeout(7.0)].await;
+        log2.borrow_mut().push(format!("first:{}", h.now()));
+    });
+    env.run();
+    // `any_of` resolves at t=3 (earliest deadline). The process then exits,
+    // but env.run() keeps draining the event queue — the 5.0 and 7.0 wakers
+    // still fire as no-ops, advancing simulated time. So we check the log
+    // value (captured inside the process) rather than env.now().
+    assert_eq!(*log.borrow(), vec!["first:3"]);
 }
 
 #[test]

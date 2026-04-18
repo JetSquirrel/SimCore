@@ -15,7 +15,7 @@ use std::task::{Context, Poll};
 /// registered may still fire later; the executor handles such spurious wakeups
 /// gracefully.
 ///
-/// Prefer the [`any_of!`] macro over constructing this directly.
+/// Prefer the [`any_of!`](crate::any_of) macro over constructing this directly.
 pub struct AnyOf {
     futures: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
@@ -57,7 +57,7 @@ impl Future for AnyOf {
 ///
 /// Resolves immediately if constructed with an empty list (vacuously true).
 ///
-/// Prefer the [`all_of!`] macro over constructing this directly.
+/// Prefer the [`all_of!`](crate::all_of) macro over constructing this directly.
 pub struct AllOf {
     futures: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }

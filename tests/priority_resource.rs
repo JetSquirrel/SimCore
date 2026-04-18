@@ -181,6 +181,50 @@ fn in_use_and_capacity_counters() {
 }
 
 #[test]
+fn multi_capacity_mixed_priorities() {
+    // Capacity 2: two holders occupy both slots at t=0.
+    // Four waiters queue with priorities [1, 0, 1, 0] — order of awakening
+    // when slots free must be: priorities 0 first (FIFO within priority),
+    // then priorities 1 in FIFO order.
+    let mut env = SimEnv::with_seed(0);
+    let resource = PriorityResource::new(2);
+    let log = new_log();
+
+    // Two holders — each occupies a slot until t=1.
+    for i in 0..2 {
+        let h = env.handle();
+        let r = resource.clone();
+        env.spawn(async move {
+            let _guard = r.request(0).await;
+            h.timeout(1.0).await;
+            let _ = i;
+        });
+    }
+
+    // Four waiters spawned in order. Priority 0 should jump the queue, but
+    // ties break FIFO by spawn order.
+    for (label, prio) in [("A_low", 1u32), ("B_high", 0), ("C_low", 1), ("D_high", 0)] {
+        let h = env.handle();
+        let r = resource.clone();
+        let log2 = log.clone();
+        let label = label.to_string();
+        env.spawn(async move {
+            let _guard = r.request(prio).await;
+            log2.borrow_mut().push(format!("{}:{}", label, h.now()));
+            h.timeout(10.0).await; // hold past the observation window
+        });
+    }
+
+    env.run_until(2.0);
+
+    // At t=1 both slots free simultaneously — the two highest-priority
+    // waiters (B_high and D_high, both priority 0, spawned in that order)
+    // acquire. Priority-1 waiters (A_low, C_low) must still be blocked.
+    assert_eq!(*log.borrow(), vec!["B_high:1", "D_high:1"]);
+    assert_eq!(resource.in_use(), 2);
+}
+
+#[test]
 #[should_panic(expected = "capacity must be at least 1")]
 fn zero_capacity_panics() {
     PriorityResource::new(0);

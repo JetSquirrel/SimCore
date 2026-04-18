@@ -41,7 +41,7 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (50 integration tests + 3 inline unit tests).
+Current coverage: **~98% lines** across all library source files (57 integration tests + 3 inline unit tests).
 
 | File | Line coverage |
 |---|---|
@@ -74,7 +74,7 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 
 ## Test files
 
-### tests/timeout.rs — 8 tests
+### tests/timeout.rs — 10 tests
 
 | Test | What it verifies |
 |---|---|
@@ -86,6 +86,8 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `simenv_new_creates_valid_env` | `SimEnv::new()` (entropy-seeded) produces a usable environment |
 | `simenv_timeout_method` | `timeout()` called directly on `SimEnv` (not via `EnvHandle`) |
 | `rng_guard_covers_all_rngcore_methods` | `next_u32`, `fill_bytes`, `try_fill_bytes` all delegate correctly |
+| `timeout_repoll_before_deadline_returns_pending` | Regression: `all_of!` re-polls of a scheduled-but-unfired `Timeout` return `Pending` |
+| `any_of_first_pass_all_pending` | `any_of!` first-poll pass does not falsely resolve unfired timeouts |
 
 ### tests/event.rs — 5 tests
 
@@ -108,7 +110,7 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `in_use_and_capacity_counters` | `in_use()` and `capacity()` return correct values throughout the lifecycle |
 | `zero_capacity_panics` | `Resource::new(0)` panics with the expected message |
 
-### tests/priority_resource.rs — 6 tests
+### tests/priority_resource.rs — 7 tests
 
 | Test | What it verifies |
 |---|---|
@@ -117,6 +119,7 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `fifo_within_same_priority` | Three waiters at the same priority level served in spawn order (`seq` counter) |
 | `guard_drop_releases_exactly_one` | `BinaryHeap::pop()` wakes only the top-priority waiter, not all |
 | `in_use_and_capacity_counters` | `in_use()` and `capacity()` track correctly throughout the lifecycle |
+| `multi_capacity_mixed_priorities` | Capacity=2 with four interleaved priorities; on simultaneous release both priority-0 waiters acquire ahead of priority-1 |
 | `zero_capacity_panics` | `PriorityResource::new(0)` panics with the expected message |
 
 ### tests/combinator.rs — 8 tests
@@ -139,7 +142,7 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `all_of_empty_resolves_immediately` | `AllOf::new(vec![])` | Resolves at t=0 without suspending |
 | `all_of_mixed_timeout_and_event` | `all_of![timeout(5.0), signal]`; signal fires at t=8 | Resolves at t=8 |
 
-### tests/container.rs — 11 tests
+### tests/container.rs — 12 tests
 
 | Test | What it verifies |
 |---|---|
@@ -150,10 +153,27 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `fifo_ordering_for_get_waiters` | Three blocked `get`s served in spawn order as `put`s trickle in |
 | `fifo_ordering_for_put_waiters` | Three blocked `put`s (full container) served in spawn order |
 | `cascade_satisfies_multiple_gets` | One large `put` wakes multiple pending `get`s in one cascade pass |
+| `cascade_chain_get_put_get_put` | `trigger_cascade` loop resolves a 5-step get→put→get→put→get chain in one pass |
 | `level_and_capacity_accessors` | `level()`/`capacity()` return correct values before/after operations |
 | `zero_capacity_panics` | `Container::new(0.0, 0.0)` panics |
 | `negative_capacity_panics` | `Container::new(-1.0, 0.0)` panics |
 | `initial_level_exceeds_capacity_panics` | `Container::new(5.0, 6.0)` panics |
+
+### tests/dropped_awaitable.rs — 6 tests
+
+Verifies that abandoning a suspendable future (e.g., via `any_of!` where a
+competing arm wins) does not corrupt the primitive's internal waiter queue.
+All primitives use a shared `Rc<Cell<bool>>` canceled flag between the
+request future and its queue entry.
+
+| Test | What it verifies |
+|---|---|
+| `dropped_event_awaitable_does_not_block_others` | Dropping one `EventAwaitable` does not prevent other waiters from being woken on `fire()` |
+| `dropped_resource_request_does_not_starve_followup` | Live waiter behind a canceled entry is still served on guard release |
+| `dropped_priority_resource_request_does_not_starve_followup` | Same, for `PriorityResource` |
+| `dropped_container_get_does_not_leak_level` | Cascade does not deduct level for a canceled `get` entry |
+| `dropped_container_put_does_not_add_level` | Cascade does not add level for a canceled `put` entry |
+| `dropped_container_get_does_not_starve_followup` | Live `get` waiter behind a canceled one is still served by a later `put` |
 
 ### tests/system.rs — 3 tests
 

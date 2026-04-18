@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -12,10 +12,19 @@ mod preemptive;
 pub mod priority;
 pub use priority::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
 
+struct ResourceWaiter {
+    waker: Waker,
+    /// Shared with the owning `ResourceRequest`. Set to `true` by the request's
+    /// `Drop` impl when the future is abandoned before being granted; the guard
+    /// release loop skips canceled entries so live waiters behind them are
+    /// still woken.
+    canceled: Rc<Cell<bool>>,
+}
+
 struct ResourceState {
     capacity: usize,
     in_use: usize,
-    waiters: VecDeque<Waker>,
+    waiters: VecDeque<ResourceWaiter>,
 }
 
 /// A cloneable handle to a capacity-limited resource pool.
@@ -56,6 +65,7 @@ impl Resource {
         ResourceRequest {
             state: Rc::clone(&self.state),
             registered: false,
+            canceled: Rc::new(Cell::new(false)),
         }
     }
 
@@ -78,6 +88,9 @@ pub struct ResourceRequest {
     /// Whether this request has already been enqueued in `waiters`.
     /// Prevents double-queuing on repeated polls.
     registered: bool,
+    /// Shared with the queue entry; set to `true` on drop if the request was
+    /// registered but never granted, so the guard-release loop skips it.
+    canceled: Rc<Cell<bool>>,
 }
 
 impl Future for ResourceRequest {
@@ -94,11 +107,22 @@ impl Future for ResourceRequest {
                 });
             }
             if !self.registered {
-                state.waiters.push_back(cx.waker().clone());
+                state.waiters.push_back(ResourceWaiter {
+                    waker: cx.waker().clone(),
+                    canceled: Rc::clone(&self.canceled),
+                });
             }
         }
         self.registered = true;
         Poll::Pending
+    }
+}
+
+impl Drop for ResourceRequest {
+    fn drop(&mut self) {
+        if self.registered {
+            self.canceled.set(true);
+        }
     }
 }
 
@@ -114,8 +138,15 @@ impl Drop for ResourceGuard {
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
         state.in_use -= 1;
-        if let Some(waker) = state.waiters.pop_front() {
-            waker.wake();
+        // Pop entries until we find a live (non-canceled) waiter.
+        // Canceled entries are abandoned requests whose futures were dropped;
+        // waking their dead wakers is harmless but would leave subsequent
+        // live waiters stranded, so skip them instead.
+        while let Some(w) = state.waiters.pop_front() {
+            if !w.canceled.get() {
+                w.waker.wake();
+                return;
+            }
         }
     }
 }

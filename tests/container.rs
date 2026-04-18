@@ -194,6 +194,79 @@ fn fifo_ordering_for_put_waiters() {
 // Cascade
 // ---------------------------------------------------------------------------
 
+/// `trigger_cascade` must loop: satisfying a blocked `get` frees space and
+/// may unblock a subsequent `put`, whose completion may then unblock another
+/// `get`, etc. This test sets up a 4-step chain (`get→put→get→put`) that is
+/// resolved by a single `get` at t=1, and verifies every waiter resolves in
+/// the same cascade pass (no simulated-time advance).
+#[test]
+fn cascade_chain_get_put_get_put() {
+    let mut env = SimEnv::with_seed(0);
+    // Capacity 4, level starts at 4 (full).
+    let c = Container::new(4.0, 4.0);
+    let log = new_log();
+
+    // Two producers — each blocks immediately (container is full).
+    for label in ["P1", "P2"] {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        let label = label.to_string();
+        env.spawn(async move {
+            c.put(4.0).await;
+            log.borrow_mut().push(format!("{}:{}", label, h.now()));
+        });
+    }
+
+    // Two consumers (beyond the initial 4 units) — G1 blocks at level=0
+    // after the initial full level is drained; G2 blocks too.
+    // First spawn a consumer that drains the initial level so P1 can fill it.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(4.0).await; // drains initial full level (resolves immediately)
+            log.borrow_mut().push(format!("G_init:{}", h.now()));
+        });
+    }
+    for label in ["G1", "G2"] {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        let label = label.to_string();
+        env.spawn(async move {
+            c.get(4.0).await;
+            log.borrow_mut().push(format!("{}:{}", label, h.now()));
+        });
+    }
+
+    env.run();
+
+    // Expected cascade at t=0:
+    //  1. G_init takes level 4→0 (initial drain)           → wakes P1
+    //  2. P1 puts 4, level 0→4                              → wakes G1
+    //  3. G1 takes 4, level 4→0                             → wakes P2
+    //  4. P2 puts 4, level 0→4                              → wakes G2
+    //  5. G2 takes 4, level 4→0                             → end of cascade
+    // All five events resolve at t=0 in a single pass of `trigger_cascade`.
+    let entries = log.borrow().clone();
+    assert_eq!(entries.len(), 5);
+    for entry in &entries {
+        assert!(
+            entry.ends_with(":0"),
+            "expected every cascade step at t=0, got: {:?}",
+            entries,
+        );
+    }
+    // FIFO order preserved within the get and put queues.
+    assert!(entries.contains(&"G_init:0".to_string()));
+    assert!(entries.contains(&"P1:0".to_string()));
+    assert!(entries.contains(&"P2:0".to_string()));
+    assert!(entries.contains(&"G1:0".to_string()));
+    assert!(entries.contains(&"G2:0".to_string()));
+}
+
 #[test]
 fn cascade_satisfies_multiple_gets() {
     let mut env = SimEnv::with_seed(0);

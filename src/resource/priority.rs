@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 use std::future::Future;
@@ -16,6 +16,10 @@ struct PriorityWaiter {
     /// same priority level.
     seq: u64,
     waker: Waker,
+    /// Shared with the owning `PriorityResourceRequest`. Set to `true` if the
+    /// request is dropped before being granted; the guard-release loop skips
+    /// canceled entries so live higher-priority waiters still get served.
+    canceled: Rc<Cell<bool>>,
 }
 
 // BinaryHeap is a max-heap. We want the *lowest* (priority, seq) pair at the
@@ -109,6 +113,7 @@ impl PriorityResource {
             priority,
             seq: 0,
             registered: false,
+            canceled: Rc::new(Cell::new(false)),
         }
     }
 
@@ -134,6 +139,9 @@ pub struct PriorityResourceRequest {
     seq: u64,
     /// Prevents double-queuing on repeated polls (same pattern as `ResourceRequest`).
     registered: bool,
+    /// Shared with the queue entry; set to `true` on drop if the request was
+    /// registered but never granted.
+    canceled: Rc<Cell<bool>>,
 }
 
 impl Future for PriorityResourceRequest {
@@ -159,6 +167,7 @@ impl Future for PriorityResourceRequest {
                     priority: self.priority,
                     seq,
                     waker: cx.waker().clone(),
+                    canceled: Rc::clone(&self.canceled),
                 });
                 Some(seq)
             } else {
@@ -175,6 +184,14 @@ impl Future for PriorityResourceRequest {
     }
 }
 
+impl Drop for PriorityResourceRequest {
+    fn drop(&mut self) {
+        if self.registered {
+            self.canceled.set(true);
+        }
+    }
+}
+
 /// RAII guard that holds one unit of a [`PriorityResource`].
 ///
 /// The unit is released automatically when this value is dropped, waking the
@@ -187,8 +204,13 @@ impl Drop for PriorityResourceGuard {
     fn drop(&mut self) {
         let mut state = self.state.borrow_mut();
         state.in_use -= 1;
-        if let Some(waiter) = state.waiters.pop() {
-            waiter.waker.wake();
+        // Skip canceled (abandoned) waiters so live higher-priority waiters
+        // behind them are still served.
+        while let Some(waiter) = state.waiters.pop() {
+            if !waiter.canceled.get() {
+                waiter.waker.wake();
+                return;
+            }
         }
     }
 }

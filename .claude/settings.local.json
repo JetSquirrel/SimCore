@@ -10,7 +10,8 @@
       "Bash(grep -v \"^$\")",
       "Bash(cargo bench:*)",
       "Bash(cargo clippy:*)",
-      "Bash(grep -v \"^$\\\\|Compiling\\\\|Checking\\\\|Finished\\\\|warning: unused\")"
+      "Bash(grep -v \"^$\\\\|Compiling\\\\|Checking\\\\|Finished\\\\|warning: unused\")",
+      "Bash(cargo doc *)"
     ]
   }
 }

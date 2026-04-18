@@ -36,7 +36,6 @@ simu/
 │   │   ├── mod.rs       # Resource, ResourceRequest, ResourceGuard
 │   │   ├── priority.rs  # PriorityResource (post-MVP)
 │   │   └── preemptive.rs # PreemptiveResource (post-MVP)
-│   └── error.rs
 ├── examples/
 │   └── hospital.rs
 └── tests/
@@ -84,7 +83,6 @@ Resources are created outside `SimEnv` and shared across processes via `Arc<Reso
 |-------|---------|
 | `rand` + `rand_distr` | Seeded RNG and distributions (required) |
 | `rayon` | Optional Monte Carlo helper (feature flag `monte-carlo`) |
-| `thiserror` | Error types (required) |
 
 ## MVP scope
 

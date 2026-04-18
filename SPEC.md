@@ -335,6 +335,10 @@ let results = monte_carlo::run(0..10, |seed| {
 results in seed order. Because `SimEnv` is created *inside* each closure, it never crosses thread
 boundaries and its `!Send` nature is not a problem.
 
+If any worker thread panics, the original panic payload is re-raised on the
+calling thread via `std::panic::resume_unwind` (after all siblings have been
+joined, so no threads are orphaned).
+
 For finer control, threads can be managed manually:
 
 ```rust
@@ -348,6 +352,51 @@ let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
 ```
 
 **Requirement:** `SimEnv` must produce identical event sequences given the same seed and process logic.
+
+---
+
+## 4.7 Internal invariants
+
+The following patterns are shared across all suspendable primitives. They are
+implementation details but are documented because they are load-bearing for
+correctness.
+
+### `registered` flag
+
+Every request-future (`ResourceRequest`, `PriorityResourceRequest`,
+`ContainerGetRequest`, `ContainerPutRequest`) carries a `registered: bool`
+flag. On first poll the future enqueues a waiter; on subsequent polls the
+`registered` check prevents double-queuing. Once registered, the future only
+returns `Ready` when the wake cascade explicitly marks it done — a
+spurious re-poll (from an unrelated waker) cannot steal capacity ahead of an
+earlier waiter and thereby violate FIFO ordering.
+
+### `canceled` flag on waiter entries
+
+If a registered request-future is dropped before being granted (for example,
+a competing arm of `any_of!` resolves first), its `Drop` impl sets a shared
+`Rc<Cell<bool>>` canceled flag on the queue entry. Guard-release loops
+(`Resource`, `PriorityResource`) and the Container wake-cascade skip canceled
+entries, preserving two invariants:
+
+- **No waiter starvation**: a live waiter behind a dropped one is still woken.
+- **No material leak in `Container`**: the cascade never deducts level for an
+  abandoned `get`, nor adds level for an abandoned `put`.
+
+### `trigger_cascade` for `Container`
+
+After any level change (successful `put` or `get`), `trigger_cascade` loops
+over `wake_get_waiters` and `wake_put_waiters` until the level stabilises.
+One iteration is sufficient for typical workloads; the loop handles chains
+where a put immediately enables a get, which immediately enables another
+put, and so on, all within a single call.
+
+### `RngGuard` and the no-await invariant
+
+`EnvHandle::rng()` returns an `impl RngCore + '_` wrapper over a `RefMut` into
+the SimEnv's RNG. Because `RefMut` is `!Send` and borrows `self`, the returned
+guard cannot cross an `.await` point — the compiler rejects any such
+misuse. This makes deterministic sampling safe by construction.
 
 ---
 
@@ -374,7 +423,7 @@ All MVP features are implemented.
 | `AnyOf` / `AllOf` combinators      | Done ✅     |
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
-| Integration test suite (50 tests)  | Done ✅     |
+| Integration test suite (57 tests)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
@@ -436,8 +485,11 @@ and patient throughput is printed to stdout.
 | `rand`        | Seeded RNG, `RngCore` trait              | required        |
 | `rand_distr`  | Exponential, Normal, Poisson, etc.       | required        |
 | `rayon`       | Optional parallel Monte Carlo helper     | optional (`monte-carlo` feature) |
-| `thiserror`   | Error types                              | required        |
 | `criterion`   | Statistical benchmark harness            | dev-dependency  |
+
+Error types will be added via `thiserror` when a public fallible API is
+introduced (first candidate: process-join in post-MVP). Until then the library
+surface is panic-on-misuse only.
 
 No async runtime dependency (tokio, async-std) — the custom executor is self-contained.
 
