@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
@@ -6,15 +7,18 @@ use std::rc::Rc;
 use rand::Rng;
 use rand_distr::Exp;
 use simu::env::{EnvHandle, SimEnv};
-use simu::event::{EventAwaitable, EventTrigger};
+use simu::event::EventTrigger;
 use simu::{any_of, PriorityResource, Resource};
 
 // ---------------------------------------------------------------------------
 // Hospital simulation — demonstrates post-MVP features:
 //
 //  • PriorityResource  : nurse serves critical patients (triage 0) first
-//  • AnyOf             : treatment races against an early-discharge signal
-//                        fired when all beds fill up simultaneously
+//  • AnyOf             : treatment races against a personal eviction signal
+//
+// When a critical patient arrives and every bed is occupied, they fire the
+// eviction trigger of the longest-admitted standard patient, who then
+// resolves their any_of early and vacates their bed.
 // ---------------------------------------------------------------------------
 
 const SIM_DURATION: f64    = 480.0;      // 8-hour shift in minutes
@@ -29,6 +33,11 @@ const CRITICAL_PROB: f64   = 0.3;       // 30 % of patients are critical
 
 type Log = Rc<RefCell<Vec<String>>>;
 
+/// Personal eviction triggers for patients currently occupying a bed.
+/// BTreeMap keeps insertion order by patient_id so we always evict the
+/// longest-admitted patient first (lowest id = earliest arrival).
+type EvictionMap = Rc<RefCell<BTreeMap<u32, EventTrigger>>>;
+
 struct Stats {
     critical_treated: u32,
     standard_treated: u32,
@@ -39,12 +48,11 @@ struct Stats {
 
 #[derive(Clone)]
 struct HospitalCtx {
-    nurse:          PriorityResource,
-    beds:           Resource,
-    /// Patients await this; fired by the bed-pressure monitor when all beds fill.
-    early_discharge: EventAwaitable,
-    log:            Log,
-    stats:          Rc<RefCell<Stats>>,
+    nurse:        PriorityResource,
+    beds:         Resource,
+    eviction_map: EvictionMap,
+    log:          Log,
+    stats:        Rc<RefCell<Stats>>,
 }
 
 pub struct SimResult {
@@ -86,25 +94,7 @@ async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
     }
 }
 
-/// Bed-pressure monitor: fired once when every bed is simultaneously occupied.
-/// Stable (standard) patients in beds will be prompted to leave early.
-async fn bed_pressure_monitor(env: EnvHandle, ctx: HospitalCtx, trigger: EventTrigger) {
-    loop {
-        env.timeout(1.0).await;
-        if env.now() > SIM_DURATION { break; }
-
-        if ctx.beds.in_use() >= ctx.beds.capacity() {
-            ctx.log.borrow_mut().push(format!(
-                "[t={:5.1}] *** BED PRESSURE: all {}/{} beds occupied — early-discharge signal ***",
-                env.now(), ctx.beds.in_use(), ctx.beds.capacity(),
-            ));
-            trigger.fire(); // one-shot; EventTrigger is consumed here
-            break;
-        }
-    }
-}
-
-/// A single patient: triage nurse → bed → treatment (or early discharge).
+/// A single patient: triage nurse → bed → treatment (possibly early-discharged).
 async fn patient(
     env: EnvHandle,
     id: u32,
@@ -128,7 +118,22 @@ async fn patient(
     env.timeout(TRIAGE_DURATION).await;
     drop(_nurse);
 
-    // --- Bed ---
+    // --- Critical patients: evict the longest-admitted patient if beds are full ---
+    if triage == 0 && ctx.beds.in_use() >= ctx.beds.capacity() {
+        // BTreeMap iterates in ascending key (patient_id) order — lowest id first.
+        let victim_id = ctx.eviction_map.borrow().keys().next().copied();
+        if let Some(vid) = victim_id {
+            if let Some(trigger) = ctx.eviction_map.borrow_mut().remove(&vid) {
+                ctx.log.borrow_mut().push(format!(
+                    "[t={:5.1}] Patient {:2} [CRITICAL] triggers early discharge of patient {:2}",
+                    env.now(), id, vid,
+                ));
+                trigger.fire(); // patient `vid`'s any_of will resolve on next poll
+            }
+        }
+    }
+
+    // --- Wait for a bed ---
     let bed_wait_start = env.now();
     let _bed = ctx.beds.request().await;
     let bed_wait = env.now() - bed_wait_start;
@@ -138,25 +143,26 @@ async fn patient(
         env.now(), id, ctx.beds.in_use(), ctx.beds.capacity(),
     ));
 
-    // --- Treatment races against early-discharge signal ---
-    // If the early-discharge event fires before treatment completes, the
-    // patient leaves early. Detection: if env.now() < admitted_at + treatment,
-    // the signal (not the timeout) caused the wakeup.
-    any_of![
-        env.timeout(treatment_duration),
-        ctx.early_discharge.clone()
-    ]
-    .await;
+    // --- Register personal eviction signal, then race treatment vs. eviction ---
+    let (my_trigger, my_signal) = env.event();
+    ctx.eviction_map.borrow_mut().insert(id, my_trigger);
 
+    any_of![env.timeout(treatment_duration), my_signal].await;
+
+    // Detect which branch won: eviction fires before the full treatment elapses.
     let was_early = env.now() < admitted_at + treatment_duration;
+
+    // Clean up our eviction entry (no-op if already evicted and removed).
+    ctx.eviction_map.borrow_mut().remove(&id);
+
     if was_early {
         ctx.log.borrow_mut().push(format!(
-            "[t={:5.1}] Patient {:2} EARLY discharge  (beds: {}/{})",
+            "[t={:5.1}] Patient {:2} EARLY discharge   (beds: {}/{})",
             env.now(), id, ctx.beds.in_use() - 1, ctx.beds.capacity(),
         ));
     } else {
         ctx.log.borrow_mut().push(format!(
-            "[t={:5.1}] Patient {:2} discharged       (beds: {}/{})",
+            "[t={:5.1}] Patient {:2} discharged        (beds: {}/{})",
             env.now(), id, ctx.beds.in_use() - 1, ctx.beds.capacity(),
         ));
     }
@@ -176,14 +182,12 @@ fn run_simulation(seed: u64) -> SimResult {
     let mut env = SimEnv::with_seed(seed);
     let h = env.handle();
 
-    let (discharge_trigger, discharge_signal) = env.event();
-
     let ctx = HospitalCtx {
-        nurse:           PriorityResource::new(1),
-        beds:            Resource::new(3),
-        early_discharge: discharge_signal,
-        log:             Rc::new(RefCell::new(Vec::new())),
-        stats:           Rc::new(RefCell::new(Stats {
+        nurse:        PriorityResource::new(1),
+        beds:         Resource::new(3),
+        eviction_map: Rc::new(RefCell::new(BTreeMap::new())),
+        log:          Rc::new(RefCell::new(Vec::new())),
+        stats:        Rc::new(RefCell::new(Stats {
             critical_treated: 0,
             standard_treated: 0,
             early_discharged: 0,
@@ -192,8 +196,7 @@ fn run_simulation(seed: u64) -> SimResult {
         })),
     };
 
-    env.spawn(arrivals(h.clone(), ctx.clone()));
-    env.spawn(bed_pressure_monitor(h, ctx.clone(), discharge_trigger));
+    env.spawn(arrivals(h, ctx.clone()));
     env.run();
 
     let path = format!("run_{:02}.log", seed);
