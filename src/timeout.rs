@@ -29,12 +29,17 @@ impl Future for Timeout {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if self.scheduled {
-            Poll::Ready(())
-        } else {
+        // Return Ready only when the deadline has actually been reached.
+        // Checking both flags guards against spurious re-polls that arrive
+        // before our deadline — for example when AllOf re-polls all sub-futures
+        // after one of its other futures fires.
+        if self.scheduled && self.env.now() >= self.deadline {
+            return Poll::Ready(());
+        }
+        if !self.scheduled {
             self.env.schedule_wakeup(self.deadline, cx.waker().clone());
             self.scheduled = true;
-            Poll::Pending
         }
+        Poll::Pending
     }
 }

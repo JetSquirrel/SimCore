@@ -189,7 +189,22 @@ all are woken when `trigger.fire()` is called.
 
 **`EventTrigger::fire` consumes `self`** — a trigger can only be fired once.
 
-**Post-MVP additions:** `AnyOf`, `AllOf` combinators; `Interrupt` (preemption); `Condition`.
+**Combinators** `AnyOf` and `AllOf` compose any `Future<Output = ()>` futures:
+
+```rust
+use simu::{any_of, all_of};
+
+// Race: resolve when the first of several events fires
+any_of![h.timeout(10.0), signal.clone()].await;
+
+// Barrier: resolve when all events have fired
+all_of![phase_a, phase_b, phase_c].await;
+```
+
+Both accept one or more expressions via macro (which auto-`Box::pin` each);
+`AnyOf::new(vec![])` panics, `AllOf::new(vec![])` resolves immediately.
+
+**Post-MVP additions:** `Interrupt` (preemption); `Condition`.
 
 ### 4.5 Resource Model (MVP)
 
@@ -329,7 +344,9 @@ All MVP features are implemented.
 | Monte Carlo via `monte_carlo::run` | Done ✅     |
 | Hospital example (see §7)          | Done ✅     |
 | `PriorityResource` with priority heap | Done ✅  |
-| Integration test suite (31 tests)  | Done ✅     |
+| `AnyOf` / `AllOf` combinators      | Done ✅     |
+| `any_of!` / `all_of!` macros       | Done ✅     |
+| Integration test suite (39 tests)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
@@ -339,17 +356,16 @@ All MVP features are implemented.
 Listed in priority order:
 
 1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-3. **`AnyOf` / `AllOf` combinators** — wait for the first/all of a set of events.
-4. **`ProcessHandle`** — await the completion of a spawned process.
-5. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-6. **Event recording and replay** — log all events with timestamps; replay for deterministic debugging
+2. **`ProcessHandle`** — await the completion of a spawned process.
+3. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+4. **Event recording and replay** — log all events with timestamps; replay for deterministic debugging
    and regression testing.
-7. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
-8. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
-9. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-10. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
-    only when process logic can be expressed as data-parallel kernels (e.g., pure queuing networks).
-    Requires further design work; depends on CUDA Rust bindings maturity.
+5. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
+6. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
+7. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+8. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
+   only when process logic can be expressed as data-parallel kernels (e.g., pure queuing networks).
+   Requires further design work; depends on CUDA Rust bindings maturity.
 
 ---
 
@@ -410,4 +426,3 @@ No async runtime dependency (tokio, async-std) — the custom executor is self-c
 - Event recording and replay.
 - Process interrupts and preemption.
 - `Container`, `Store`, `FilterStore` resource types.
-- `AnyOf` / `AllOf` event combinators.

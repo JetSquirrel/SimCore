@@ -41,7 +41,7 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (31 integration tests + 3 inline unit tests).
+Current coverage: **~98% lines** across all library source files (39 integration tests + 3 inline unit tests).
 
 | File | Line coverage |
 |---|---|
@@ -119,6 +119,26 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `in_use_and_capacity_counters` | `in_use()` and `capacity()` track correctly throughout the lifecycle |
 | `zero_capacity_panics` | `PriorityResource::new(0)` panics with the expected message |
 
+### tests/combinator.rs — 8 tests
+
+#### AnyOf
+
+| Test | Scenario | What it verifies |
+|---|---|---|
+| `any_of_first_timeout_wins` | `any_of![timeout(1.0), timeout(5.0)]` | Resolves at t=1; earlier future wins |
+| `any_of_event_beats_timeout` | `any_of![timeout(10.0), signal]`; event fires at t=2 | Resolves at t=2 even though timeout is pending |
+| `any_of_already_fired_event` | Event fired before `any_of` is awaited | Resolves at t=0 via the `fired` latch |
+| `any_of_empty_panics` | `AnyOf::new(vec![])` | Panics with expected message |
+
+#### AllOf
+
+| Test | Scenario | What it verifies |
+|---|---|---|
+| `all_of_waits_for_last` | `all_of![timeout(1.0), timeout(2.0), timeout(5.0)]` | Resolves at t=5 (slowest) |
+| `all_of_two_events` | `all_of![event_a, event_b]`; A fires at t=3, B fires at t=7 | Resolves at t=7 |
+| `all_of_empty_resolves_immediately` | `AllOf::new(vec![])` | Resolves at t=0 without suspending |
+| `all_of_mixed_timeout_and_event` | `all_of![timeout(5.0), signal]`; signal fires at t=8 | Resolves at t=8 |
+
 ### tests/system.rs — 3 tests
 
 Scenario: **Job Shop with Quality Gate** — a machine (`Resource`, capacity 1) and a
@@ -168,3 +188,8 @@ N values are the parameterized workload sizes passed to `BenchmarkId`.
 - **RNG sampling before async blocks**: `env.rng()` returns a `RefMut` guard that
   cannot be held across an `.await`. Sample values before the `async move` block
   and move the sampled value in.
+- **`Timeout` spurious-wakeup safety**: `Timeout::poll` checks both `scheduled`
+  and `env.now() >= deadline` before returning `Ready`. This means `AllOf` (and
+  any other combinator) can safely re-poll a `Timeout` sub-future when a *different*
+  sub-future fires — the re-polled timeout returns `Pending` until its own deadline
+  is reached.

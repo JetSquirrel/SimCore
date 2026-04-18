@@ -140,16 +140,40 @@ Priority-ordered resource pool: lowest priority number served first; FIFO tie-br
 
 ---
 
+## Step 9: AnyOf / AllOf Combinators ✅
+
+Race and barrier combinators: `AnyOf` resolves when the first sub-future fires;
+`AllOf` resolves when all sub-futures have fired.
+
+**Files:**
+- `src/combinator.rs` — `AnyOf`, `AllOf`, `any_of!` and `all_of!` macros
+- `src/timeout.rs` — bug fix: `poll` now checks `scheduled && now() >= deadline`
+  instead of just `scheduled`; needed so `AllOf` can re-poll timeouts without
+  false positives
+- `src/lib.rs` — added `pub mod combinator`; re-exported `AnyOf`, `AllOf`
+- `tests/combinator.rs` — 8 tests
+- `examples/hospital.rs` — added bed-pressure monitor + `any_of!` in patient
+  treatment; added `early_discharged` stat and summary column
+
+**Design:**
+- `AnyOf::poll`: iterates sub-futures, returns `Ready` on first that resolves
+- `AllOf::poll`: uses `Vec::retain_mut` to drop completed futures; returns `Ready`
+  when list is empty
+- Both types are `Unpin` (only contain `Vec` and `Pin<Box<...>>`), so `get_mut()`
+  is safe in `poll`
+- Macros auto-`Box::pin` each expression, eliminating call-site verbosity
+
+---
+
 ## Post-MVP Roadmap
 
 Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
 
 1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-2. **`AnyOf` / `AllOf` combinators** — wait for the first/all of a set of events.
-3. **`ProcessHandle`** — await the completion of a spawned process.
-4. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-5. **Event recording and replay** — log all events with timestamps for deterministic debugging.
-6. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
-7. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
-8. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-9. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+2. **`ProcessHandle`** — await the completion of a spawned process.
+3. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+4. **Event recording and replay** — log all events with timestamps for deterministic debugging.
+5. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
+6. **`Container`** — continuous-quantity resource (e.g., blood supply in litres).
+7. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+8. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
