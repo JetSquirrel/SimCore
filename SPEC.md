@@ -479,12 +479,10 @@ All MVP features are implemented.
 Listed in priority order:
 
 1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-3. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-4. **Event recording and replay** — log all events with timestamps; replay for deterministic debugging
-   and regression testing.
-5. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
-6. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-7. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
+2. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+3. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
+4. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+5. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
    only when process logic can be expressed as data-parallel kernels (e.g., pure queuing networks).
    Requires further design work; depends on CUDA Rust bindings maturity.
 
@@ -547,6 +545,7 @@ No async runtime dependency (tokio, async-std) — the custom executor is self-c
 - GUI or visualisation.
 - Monitoring / statistics collection (left to the application layer).
 - GPU acceleration.
-- Event recording and replay.
+- Event recording and replay (seeded determinism already makes replay redundant;
+  re-running with the same seed reproduces the run bit-for-bit).
 - Process interrupts and preemption.
 - `Container`, `Store`, `FilterStore` resource types.

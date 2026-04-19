@@ -226,7 +226,6 @@ Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
 
 1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
 2. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-3. **Event recording and replay** — log all events with timestamps for deterministic debugging.
-4. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
-5. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-6. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+3. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
+4. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+5. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
