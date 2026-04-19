@@ -96,12 +96,27 @@ cargo clippy -- -D warnings
 
 ## Examples
 
+Two end-to-end examples demonstrate every public primitive in different domains. Both run 10
+parallel Monte Carlo simulations, write per-run logs, and print a summary table to stdout.
+See [`examples/hospital.md`](examples/hospital.md) and [`examples/brewery.md`](examples/brewery.md)
+for full walkthroughs (sequence diagrams, configuration, sample output).
+
 ```bash
-cargo run --example hospital
+cargo run --example hospital --release
 ```
 
-The hospital example runs 10 parallel Monte Carlo simulations, writes per-run logs to
-`hospital_run_<N>.log`, and prints a summary table of patient throughput and wait times.
+A hospital emergency department: priority-scheduled triage nurse, three beds with eviction of the
+longest-admitted patient when a critical case arrives, and a blood bank modelled as a `Container`.
+Logs to `run_<N>.log`.
+
+```bash
+cargo run --example brewery --release
+```
+
+A craft brewery / bio-reactor production line from the food & beverage domain: mash → boil →
+ferment → condition → bottle → CIP. The QA inspector contaminates the longest-running fermentation
+with a per-batch `EventTrigger`; contaminated batches preempt routine cleanups via a
+`PriorityResource`. Logs to `brewery_run_<N>.log`.
 
 ## License
 

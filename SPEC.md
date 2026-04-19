@@ -488,7 +488,14 @@ Listed in priority order:
 
 ---
 
-## 7. Example: Hospital Simulation
+## 7. Examples
+
+Two end-to-end examples ship in `examples/`. Each runs 10 parallel Monte Carlo simulations via
+`monte_carlo::run`, writes a per-run log file, and prints a summary table to stdout. The full
+walkthroughs (configuration, sequence diagrams, sample output) live in `examples/hospital.md` and
+`examples/brewery.md`.
+
+### 7.1 Hospital Simulation
 
 The bundled example (`examples/hospital.rs`) models:
 
@@ -518,6 +525,53 @@ The bundled example (`examples/hospital.rs`) models:
 The example runs 10 parallel Monte Carlo simulations via `monte_carlo::run`. Each run writes output to
 a dedicated `hospital_run_<N>.log` file. After all runs complete, a summary table of mean wait times
 and patient throughput is printed to stdout.
+
+### 7.2 Brewery Simulation
+
+The second bundled example (`examples/brewery.rs`) covers the **food & beverage / process
+automation** domain: a craft brewery whose central bio-reactor (the fermenter) is the natural
+bottleneck.
+
+| Entity              | Count | Type                | Role                                       |
+|---------------------|------:|---------------------|--------------------------------------------|
+| Mash tuns           |     2 | `Resource`          | Hot-water mashing of grain                 |
+| Kettles             |     2 | `Resource`          | Wort boiling + hop addition                |
+| Fermenters          |     5 | `Resource`          | The bio-reactors (longest hold per batch)  |
+| Conditioning tanks  |     4 | `Resource`          | Post-fermentation maturation               |
+| Bottling line       |     1 | `PriorityResource`  | Premium batches (priority 0) preempt standard (priority 1) |
+| CIP crew            |     1 | `PriorityResource`  | Urgent contamination CIP (priority 0) preempts routine (priority 1) |
+| Hot-water buffer    |   one | `Container`         | Drawn during mashing, periodic restock     |
+| Yeast slurry        |   one | `Container`         | Drawn at start of fermentation, periodic propagation |
+| CO₂ recovery        |   one | `Container`         | Filled during boil                         |
+| Bulk-beer storage   |   one | `Container`         | Filled by conditioning, drained by bottling |
+
+**Batch flow:**
+
+1. Order arrives (Poisson inter-arrival; 25% premium).
+2. Acquires a **mash tun** and draws 500 L of **hot water** (timeout ~ 2 h).
+3. Acquires a **kettle**, boils 1.5 h, returns CO₂ to recovery.
+4. Draws 5 L of **yeast slurry**, requests a **fermenter**, runs `any_of![timeout(~60 h),
+   contamination_signal]`.
+5. If contamination wins → release fermenter, request **CIP crew** with priority 0
+   (preempts routine cleanups), terminate. The batch is lost.
+6. Otherwise → acquire **conditioning tank** (~ 12 h), put 800 L of beer into bulk storage.
+7. Acquire **bottling line** with priority based on premium flag, draw 800 L from bulk
+   storage, bottle (~ 6 h).
+8. Acquire **CIP crew** with priority 1, run routine cleanup (~ 1 h), release.
+
+**Contamination mechanism.** A separate `qa_inspector` process ticks at Poisson intervals and,
+with probability `CONTAMINATION_PROB`, picks the oldest in-flight fermentation from a
+`BTreeMap<batch_id, EventTrigger>` and fires its trigger. The fermenting batch's `any_of!`
+resolves on the signal branch; comparing `env.now()` against the planned deadline tells the batch
+whether contamination won.
+
+**`AllOf` join.** The `arrivals` process collects every spawned `ProcessHandle<()>::discard()`
+and, after the order book closes, awaits `AllOf` on the whole vector so the harness can record
+the simulated time the line is fully drained.
+
+Per-run logs are written to `brewery_run_<N>.log`. The summary table reports arrivals per class,
+contaminated batches, total litres bottled, and mean wait times for the fermenter, bottling line,
+and yeast pool.
 
 ---
 

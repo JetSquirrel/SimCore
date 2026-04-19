@@ -12,7 +12,9 @@
       "Bash(cargo clippy:*)",
       "Bash(grep -v \"^$\\\\|Compiling\\\\|Checking\\\\|Finished\\\\|warning: unused\")",
       "Bash(cargo doc *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(cp brewery_run_05.log /tmp/brewery_run_05.log.before)",
+      "Read(//tmp/**)"
     ]
   }
 }
