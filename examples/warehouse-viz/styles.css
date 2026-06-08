@@ -1,0 +1,274 @@
+/* ===================================================================== *
+ * Warehouse Playback Viewer — neutral "industrial" theme.
+ * All colors are CSS custom properties so the whole look restyles in one
+ * place. Forklift-blue = truck-work (unload/load, PRIO_TRUCK);
+ * safety-amber = putaway (PRIO_PUTAWAY); green = inventory; red = the
+ * preemption / stockout flash.
+ * ===================================================================== */
+
+:root {
+  --bg:            #0f1419;   /* page background (dark slate)            */
+  --panel:         #1b232c;   /* station fill                            */
+  --panel-edge:    #2c3a47;   /* station outline                        */
+  --floor:         #151c24;   /* stage background                       */
+  --zone:          #131a21;   /* zone band                              */
+  --grid:          #1f2933;   /* subtle floor grid                      */
+
+  --ink:           #e7edf3;   /* primary text                           */
+  --ink-dim:       #8b9aa8;   /* secondary text                         */
+  --ink-faint:     #54616d;   /* tertiary / labels                      */
+
+  --slot-empty:    #233039;   /* an idle resource slot                  */
+  --slot-edge:     #384a59;
+
+  --truck:         #3d8bfd;   /* forklift-blue: truck-side work          */
+  --truck-soft:    #21456f;
+  --putaway:       #f5a524;   /* safety-amber: putaway                   */
+  --putaway-soft:  #6e4d12;
+  --pick:          #25c2a0;   /* pick activity                           */
+  --pick-exp:      #c084fc;   /* expedite / hot order accent             */
+  --pack:          #8aa0b3;   /* packing                                 */
+  --inv:           #2bb673;   /* inventory tank fill                     */
+  --inv-low:       #e5484d;   /* tank when empty / stockout              */
+  --flash:         #ff4d4f;   /* preemption + stockout flash             */
+
+  --queue:         #4b5b69;   /* queued token                            */
+  --accent:        #3d8bfd;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono",
+          Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ---- Stage ---------------------------------------------------------- */
+
+#stage-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--bg);
+}
+
+#stage {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- Drop zone overlay --------------------------------------------- */
+
+#dropzone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 12, 16, 0.78);
+  backdrop-filter: blur(2px);
+  transition: opacity 0.2s ease;
+}
+#dropzone.hidden { display: none; }
+#dropzone.dragover .dz-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(61, 139, 253, 0.25);
+}
+
+.dz-card {
+  text-align: center;
+  padding: 36px 44px;
+  border: 2px dashed var(--panel-edge);
+  border-radius: 14px;
+  background: rgba(27, 35, 44, 0.85);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.dz-title { font-size: 22px; font-weight: 650; letter-spacing: 0.2px; }
+.dz-sub   { margin-top: 8px; color: var(--ink-dim); }
+.dz-or    { margin: 14px 0 12px; color: var(--ink-faint); font-size: 13px; }
+.dz-hint  { margin-top: 18px; color: var(--ink-faint); font-size: 12px; line-height: 1.6; }
+.dz-card code {
+  font-family: var(--mono);
+  background: #0d1217;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--ink-dim);
+}
+
+#pick-btn, #load-more, #transport button {
+  font-family: var(--sans);
+  cursor: pointer;
+  color: var(--ink);
+  background: var(--slot-empty);
+  border: 1px solid var(--slot-edge);
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 14px;
+  transition: background 0.12s, border-color 0.12s;
+}
+#pick-btn:hover, #load-more:hover, #transport button:hover {
+  background: #2b3b48;
+  border-color: var(--accent);
+}
+#pick-btn { font-size: 15px; padding: 10px 20px; }
+
+/* ---- Chrome (transport + ticker) ----------------------------------- */
+
+#chrome {
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, #131a21, #0d1217);
+  border-top: 1px solid var(--panel-edge);
+}
+body.no-chrome #chrome { display: none; }
+
+#transport {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  flex-wrap: wrap;
+}
+
+#transport button {
+  min-width: 40px;
+  font-size: 15px;
+  line-height: 1;
+  padding: 9px 12px;
+}
+#transport button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #07111d;
+  font-weight: 700;
+}
+#transport button.primary:hover { background: #5b9dff; }
+
+#scrubber {
+  flex: 1 1 240px;
+  min-width: 160px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+#clock {
+  min-width: 92px;
+  text-align: right;
+  color: var(--ink-dim);
+  font-size: 14px;
+}
+.mono { font-family: var(--mono); }
+
+.ctl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+.ctl.chk { gap: 5px; }
+.ctl select {
+  font-family: var(--sans);
+  color: var(--ink);
+  background: var(--slot-empty);
+  border: 1px solid var(--slot-edge);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+#seed-select:disabled { opacity: 0.5; cursor: default; }
+
+#ticker {
+  height: 26px;
+  overflow: hidden;
+  padding: 4px 18px 8px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+#ticker .row { line-height: 1.4; opacity: 0.55; }
+#ticker .row.cur { opacity: 1; color: var(--ink); }
+
+/* ---- SVG element classes (driven by render.js) --------------------- */
+
+.zone-band   { fill: var(--zone); }
+.zone-label  { fill: var(--ink-faint); font: 600 13px var(--sans); letter-spacing: 2px; }
+.station-box { fill: var(--panel); stroke: var(--panel-edge); stroke-width: 1.5; }
+.station-lab { fill: var(--ink-dim); font: 600 14px var(--sans); }
+.station-cap { fill: var(--ink-faint); font: 12px var(--mono); }
+
+.slot        { fill: var(--slot-empty); stroke: var(--slot-edge); stroke-width: 1.5; }
+.slot.busy-truck   { fill: var(--truck);   stroke: #6fb0ff; }
+.slot.busy-putaway { fill: var(--putaway); stroke: #ffc25a; }
+.slot.busy-pick    { fill: var(--pick);    stroke: #5fe6c8; }
+.slot.busy-pick-exp{ fill: var(--pick-exp);stroke: #d6abff; }
+.slot.busy-pack    { fill: var(--pack);    stroke: #b9cad8; }
+.slot.busy-generic { fill: #4a5d6d;        stroke: #6d8294; }
+.slot.flash        { fill: var(--flash) !important; stroke: #ff9a9b !important; }
+
+.fork-glyph { font: 18px var(--sans); }
+
+.tank-frame { fill: #0c1116; stroke: var(--panel-edge); stroke-width: 2; }
+.tank-fill  { fill: var(--inv); }
+.tank-fill.low { fill: var(--inv-low); }
+.tank-label { fill: var(--ink); font: 600 15px var(--mono); }
+.tank-cap   { fill: var(--ink-faint); font: 11px var(--mono); }
+
+.flow-arrow { fill: none; stroke: var(--panel-edge); stroke-width: 2; }
+.flow-label { fill: var(--ink-faint); font: 11px var(--sans); }
+.subtitle-text { fill: var(--ink-dim); font: 13px var(--mono); }
+
+.queue-badge-bg { fill: #0c1116; stroke: var(--slot-edge); stroke-width: 1; }
+.queue-badge-tx { fill: var(--ink-dim); font: 600 11px var(--mono); }
+
+.token        { stroke-width: 1.5; }
+.token-truck  { fill: var(--truck-soft);  stroke: var(--truck); }
+.token-order  { fill: #2a3b2f;            stroke: var(--pick); }
+.token-order.exp { fill: #3a2a45;         stroke: var(--pick-exp); }
+.token-label  { fill: var(--ink); font: 600 11px var(--mono); text-anchor: middle; }
+.token-sub    { fill: var(--ink-dim); font: 9px var(--mono); text-anchor: middle; }
+.stack-more   { fill: var(--ink-dim); font: 600 13px var(--mono); }
+.token.stalled { stroke: var(--flash); stroke-dasharray: 3 2; }
+.parked-pallet { fill: var(--putaway-soft); stroke: var(--putaway); stroke-width: 1.5; }
+
+/* ---- KPI panel (SVG foreignObject content) ------------------------- */
+
+.kpi-box   { fill: rgba(12,17,22,0.82); stroke: var(--panel-edge); stroke-width: 1; }
+.kpi-key   { fill: var(--ink-faint); font: 11px var(--sans); }
+.kpi-val   { fill: var(--ink); font: 700 16px var(--mono); }
+.kpi-val.hot { fill: var(--putaway); }
+.kpi-title { fill: var(--ink-dim); font: 600 12px var(--sans); letter-spacing: 1px; }
+
+/* ---- Motion / flashes ---------------------------------------------- */
+
+@keyframes flashpulse {
+  0%   { opacity: 1; }
+  100% { opacity: 0; }
+}
+.flash-ring {
+  fill: none;
+  stroke: var(--flash);
+  stroke-width: 3;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #dropzone { transition: none; }
+}

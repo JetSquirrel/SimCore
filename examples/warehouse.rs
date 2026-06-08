@@ -99,6 +99,130 @@ struct WarehouseCtx {
     inventory: Container,
     log: Log,
     stats: Rc<RefCell<Stats>>,
+    rec: Rc<RefCell<Recorder>>,
+}
+
+// ---------------------------------------------------------------------------
+// Structured event recorder — emits a machine-readable JSONL sidecar alongside
+// the human-readable `.log`, for the `warehouse-viz` playback tool. Purely
+// additive: it only ever *reads* simulation state (resource `in_use()`,
+// `Container::level()`) plus a few example-local queue counters, so it never
+// perturbs RNG draw order and the `.log` stays byte-identical.
+//
+// Each event line carries the simulated time, a semantic `ev` name, the actor,
+// an `info` map, and a full resource-occupancy `snap`shot taken at that instant
+// — so the viewer never has to infer counts and scrubbing to any point is exact.
+// JSON is hand-rolled (the payload shapes are fixed and simple) to keep the
+// example dependency-free — no `serde`.
+// ---------------------------------------------------------------------------
+
+/// Per-run collector of pre-serialized JSONL event lines, plus the queue-depth
+/// bookkeeping the resources don't expose publicly. Each `*_q` is incremented
+/// immediately before a (possibly blocking) request and decremented the instant
+/// it is granted, so a snapshot reads the true number of waiters. `putaway_active`
+/// tracks how many forklift units are currently on putaway (vs. truck-work), so
+/// the viewer can color the fleet by task.
+#[derive(Default)]
+struct Recorder {
+    lines: Vec<String>,
+    dock_q: u32,
+    fork_q: u32,
+    pick_q: u32,
+    pack_q: u32,
+    inv_q: u32,
+    putaway_active: u32,
+}
+
+/// A JSON scalar for an event's `info` map.
+enum J {
+    Num(f64),
+    Int(u32),
+    Bool(bool),
+}
+
+impl J {
+    fn render(&self) -> String {
+        match self {
+            J::Num(x) => num(*x),
+            J::Int(n) => n.to_string(),
+            J::Bool(b) => b.to_string(),
+        }
+    }
+}
+
+/// Compact, deterministic JSON number: integral values print without a decimal
+/// point, everything else uses Rust's shortest round-tripping `f64` formatting.
+fn num(x: f64) -> String {
+    if !x.is_finite() {
+        return "0".to_string();
+    }
+    if x == x.trunc() && x.abs() < 1e15 {
+        format!("{}", x as i64)
+    } else {
+        format!("{}", x)
+    }
+}
+
+impl WarehouseCtx {
+    /// Record one structured event: time, `ev` name, optional `(kind, id)` actor,
+    /// an `info` map, and a snapshot of every resource's occupancy taken now.
+    fn emit(
+        &self,
+        t: f64,
+        ev: &'static str,
+        actor: Option<(&'static str, u32)>,
+        info: &[(&'static str, J)],
+    ) {
+        // Live occupancy (brief immutable borrows that release immediately).
+        let dock_u = self.dock_doors.in_use();
+        let fork_u = self.forklifts.in_use();
+        let pick_u = self.pickers.in_use();
+        let pack_u = self.packing.in_use();
+        let level = self.inventory.level();
+
+        let actor_json = match actor {
+            Some((kind, id)) => format!("{{\"kind\":\"{}\",\"id\":{}}}", kind, id),
+            None => String::from("null"),
+        };
+
+        let mut info_json = String::from("{");
+        for (i, (k, v)) in info.iter().enumerate() {
+            if i > 0 {
+                info_json.push(',');
+            }
+            info_json.push_str(&format!("\"{}\":{}", k, v.render()));
+        }
+        info_json.push('}');
+
+        let mut r = self.rec.borrow_mut();
+        let snap = format!(
+            "{{\"dock_doors\":{{\"in_use\":{},\"queue\":{}}},\
+              \"forklifts\":{{\"in_use\":{},\"queue\":{},\"putaway_active\":{}}},\
+              \"pickers\":{{\"in_use\":{},\"queue\":{}}},\
+              \"packing\":{{\"in_use\":{},\"queue\":{}}},\
+              \"inventory\":{{\"level\":{},\"waiting\":{}}}}}",
+            dock_u,
+            r.dock_q,
+            fork_u,
+            r.fork_q,
+            r.putaway_active,
+            pick_u,
+            r.pick_q,
+            pack_u,
+            r.pack_q,
+            num(level),
+            r.inv_q,
+        );
+        let line = format!(
+            "{{\"type\":\"event\",\"t\":{},\"ev\":\"{}\",\"actor\":{},\"info\":{},\"snap\":{}}}",
+            num(t),
+            ev,
+            actor_json,
+            info_json,
+            snap,
+        );
+        r.lines.push(line);
+    }
 }
 
 pub struct SimResult {
@@ -125,14 +249,22 @@ async fn inbound_truck(env: EnvHandle, id: u32, ctx: WarehouseCtx) {
         env.now(),
         id,
     ));
+    ctx.emit(env.now(), "truck_arrive", Some(("truck", id)), &[]);
 
     // --- 1. Dock door + unload (forklift @ PRIO_TRUCK — never preempted) ---
     let dock_t0 = env.now();
+    ctx.rec.borrow_mut().dock_q += 1;
     let dock = ctx.dock_doors.request().await;
+    ctx.rec.borrow_mut().dock_q -= 1;
     let dock_wait = env.now() - dock_t0;
+    // Dock is held now; the truck may still wait here for a forklift if the
+    // fleet is saturated (a visible source of dock contention).
+    ctx.emit(env.now(), "truck_dock_acquire", Some(("truck", id)), &[]);
 
     let fork_t0 = env.now();
+    ctx.rec.borrow_mut().fork_q += 1;
     let fork = ctx.forklifts.request(PRIO_TRUCK).await;
+    ctx.rec.borrow_mut().fork_q -= 1;
     let fork_wait = env.now() - fork_t0;
 
     ctx.log.borrow_mut().push(format!(
@@ -142,11 +274,18 @@ async fn inbound_truck(env: EnvHandle, id: u32, ctx: WarehouseCtx) {
         dock_wait,
         fork_wait,
     ));
+    ctx.emit(
+        env.now(),
+        "truck_unload_start",
+        Some(("truck", id)),
+        &[("dock_wait", J::Num(dock_wait)), ("fork_wait", J::Num(fork_wait))],
+    );
     env.timeout(UNLOAD_DURATION).await;
     // Free the scarce dock door (and the forklift) the moment the pallets are
     // on the floor — QC and putaway do not need a door.
     drop(fork);
     drop(dock);
+    ctx.emit(env.now(), "truck_unload_end", Some(("truck", id)), &[]);
 
     {
         let mut s = ctx.stats.borrow_mut();
@@ -158,25 +297,42 @@ async fn inbound_truck(env: EnvHandle, id: u32, ctx: WarehouseCtx) {
 
     // --- 2. Receiving check / QC (no resource — a plain timeout) ---
     env.timeout(QC_DURATION).await;
+    ctx.emit(env.now(), "truck_qc_end", Some(("truck", id)), &[]);
 
     // --- 3. Putaway: the only preemptible forklift task ---
     // A half-finished putaway is safely parked; race the work against
     // preemption and loop to finish the remainder if a truck-side job bumps us.
     let mut remaining = PUTAWAY_DURATION;
+    let mut first_putaway = true;
     loop {
         let pf_t0 = env.now();
+        ctx.rec.borrow_mut().fork_q += 1;
         let pfork = ctx.forklifts.request(PRIO_PUTAWAY).await; // priority 1
+        ctx.rec.borrow_mut().fork_q -= 1;
         {
             let mut s = ctx.stats.borrow_mut();
             s.total_fork_wait += env.now() - pf_t0;
             s.fork_requests += 1;
         }
+        ctx.rec.borrow_mut().putaway_active += 1;
+        ctx.emit(
+            env.now(),
+            if first_putaway {
+                "putaway_acquire"
+            } else {
+                "putaway_resume"
+            },
+            Some(("truck", id)),
+            &[("remaining", J::Num(remaining))],
+        );
+        first_putaway = false;
 
         let start = env.now();
         any_of![env.timeout(remaining), pfork.preempted()].await;
         remaining -= env.now() - start;
 
         if pfork.is_preempted() {
+            ctx.rec.borrow_mut().putaway_active -= 1;
             ctx.stats.borrow_mut().putaway_preemptions += 1;
             ctx.log.borrow_mut().push(format!(
                 "[t={:6.1}] Truck {:>3} putaway PREEMPTED          (pallet parked, {:>4.1} left)",
@@ -184,10 +340,17 @@ async fn inbound_truck(env: EnvHandle, id: u32, ctx: WarehouseCtx) {
                 id,
                 remaining,
             ));
+            ctx.emit(
+                env.now(),
+                "putaway_preempted",
+                Some(("truck", id)),
+                &[("remaining", J::Num(remaining))],
+            );
             // Pallet parked in staging; loop to reacquire a forklift later.
             // (Dropping an already-preempted guard is a no-op — the unit is gone.)
             continue;
         }
+        ctx.rec.borrow_mut().putaway_active -= 1;
         break; // finished uninterrupted; `pfork` drops here, freeing the unit
     }
 
@@ -201,6 +364,15 @@ async fn inbound_truck(env: EnvHandle, id: u32, ctx: WarehouseCtx) {
         ctx.inventory.level(),
         ctx.inventory.capacity(),
     ));
+    ctx.emit(
+        env.now(),
+        "putaway_done",
+        Some(("truck", id)),
+        &[
+            ("cases", J::Num(CASES_PER_DELIVERY)),
+            ("level", J::Num(ctx.inventory.level())),
+        ],
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -223,12 +395,26 @@ async fn order_fulfillment(env: EnvHandle, id: u32, expedite: bool, ctx: Warehou
         cases,
         label,
     ));
+    ctx.emit(
+        env.now(),
+        "order_arrive",
+        Some(("order", id)),
+        &[("cases", J::Num(cases)), ("expedite", J::Bool(expedite))],
+    );
 
     // --- 1. Picking (priority-scheduled, non-preemptive) ---
     let pick_prio = if expedite { PICK_EXPEDITE } else { PICK_STANDARD };
     let pick_t0 = env.now();
+    ctx.rec.borrow_mut().pick_q += 1;
     let picker = ctx.pickers.request(pick_prio).await;
+    ctx.rec.borrow_mut().pick_q -= 1;
     let pick_wait = env.now() - pick_t0;
+    ctx.emit(
+        env.now(),
+        "pick_start",
+        Some(("order", id)),
+        &[("expedite", J::Bool(expedite)), ("pick_wait", J::Num(pick_wait))],
+    );
 
     let pick_dur = {
         let dist = Exp::new(1.0 / PICK_MEAN).unwrap();
@@ -240,7 +426,18 @@ async fn order_fulfillment(env: EnvHandle, id: u32, expedite: bool, ctx: Warehou
     // an empty face waits there, still occupying its slot, until an inbound
     // putaway replenishes stock. This couples outbound to inbound.
     let stock_t0 = env.now();
+    ctx.rec.borrow_mut().inv_q += 1;
+    let stocked_out = ctx.inventory.level() < cases;
+    if stocked_out {
+        ctx.emit(
+            env.now(),
+            "stockout_begin",
+            Some(("order", id)),
+            &[("cases", J::Num(cases))],
+        );
+    }
     ctx.inventory.get(cases).await;
+    ctx.rec.borrow_mut().inv_q -= 1;
     if env.now() > stock_t0 {
         ctx.stats.borrow_mut().stockouts += 1;
         ctx.log.borrow_mut().push(format!(
@@ -249,8 +446,20 @@ async fn order_fulfillment(env: EnvHandle, id: u32, expedite: bool, ctx: Warehou
             id,
             env.now() - stock_t0,
         ));
+        ctx.emit(
+            env.now(),
+            "stockout_end",
+            Some(("order", id)),
+            &[("stalled", J::Num(env.now() - stock_t0))],
+        );
     }
     drop(picker);
+    ctx.emit(
+        env.now(),
+        "pick_end",
+        Some(("order", id)),
+        &[("level", J::Num(ctx.inventory.level()))],
+    );
 
     {
         let mut s = ctx.stats.borrow_mut();
@@ -259,19 +468,35 @@ async fn order_fulfillment(env: EnvHandle, id: u32, expedite: bool, ctx: Warehou
     }
 
     // --- 2. Packing ---
+    ctx.rec.borrow_mut().pack_q += 1;
     let pack = ctx.packing.request().await;
+    ctx.rec.borrow_mut().pack_q -= 1;
+    ctx.emit(env.now(), "pack_start", Some(("order", id)), &[]);
     env.timeout(PACK_DURATION).await;
     drop(pack);
+    ctx.emit(env.now(), "pack_end", Some(("order", id)), &[]);
 
     // --- 3. Loading onto the outbound trailer (dock + forklift @ PRIO_TRUCK) ---
     // Loading is urgent truck-side work: it will preempt a routine putaway.
     let dock_t0 = env.now();
+    ctx.rec.borrow_mut().dock_q += 1;
     let dock = ctx.dock_doors.request().await;
+    ctx.rec.borrow_mut().dock_q -= 1;
     let dock_wait = env.now() - dock_t0;
+    // Dock held; the order may still wait here for a forklift to load.
+    ctx.emit(env.now(), "order_dock_acquire", Some(("order", id)), &[]);
 
     let fork_t0 = env.now();
+    ctx.rec.borrow_mut().fork_q += 1;
     let fork = ctx.forklifts.request(PRIO_TRUCK).await;
+    ctx.rec.borrow_mut().fork_q -= 1;
     let fork_wait = env.now() - fork_t0;
+    ctx.emit(
+        env.now(),
+        "load_start",
+        Some(("order", id)),
+        &[("dock_wait", J::Num(dock_wait)), ("fork_wait", J::Num(fork_wait))],
+    );
 
     env.timeout(LOAD_DURATION).await;
     drop(fork);
@@ -296,6 +521,12 @@ async fn order_fulfillment(env: EnvHandle, id: u32, expedite: bool, ctx: Warehou
         label,
         pick_wait,
     ));
+    ctx.emit(
+        env.now(),
+        "order_ship",
+        Some(("order", id)),
+        &[("expedite", J::Bool(expedite)), ("pick_wait", J::Num(pick_wait))],
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +549,12 @@ async fn truck_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
                 env.now(),
                 truck_id - 1,
             ));
+            ctx.emit(
+                env.now(),
+                "gate_closed",
+                None,
+                &[("trucks", J::Int(truck_id - 1))],
+            );
             break;
         }
 
@@ -333,8 +570,11 @@ async fn truck_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
         let all = AllOf::new(truck_futs);
         any_of![all, env.timeout(SIM_DURATION * 10.0)].await;
     }
-    let mut s = ctx.stats.borrow_mut();
-    s.day_cleared_at = s.day_cleared_at.max(env.now());
+    {
+        let mut s = ctx.stats.borrow_mut();
+        s.day_cleared_at = s.day_cleared_at.max(env.now());
+    }
+    ctx.emit(env.now(), "day_cleared", Some(("stream", 0)), &[]);
 }
 
 async fn order_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
@@ -352,6 +592,12 @@ async fn order_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
                 env.now(),
                 order_id - 1,
             ));
+            ctx.emit(
+                env.now(),
+                "book_closed",
+                None,
+                &[("orders", J::Int(order_id - 1))],
+            );
             break;
         }
 
@@ -366,8 +612,11 @@ async fn order_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
         let all = AllOf::new(order_futs);
         any_of![all, env.timeout(SIM_DURATION * 10.0)].await;
     }
-    let mut s = ctx.stats.borrow_mut();
-    s.day_cleared_at = s.day_cleared_at.max(env.now());
+    {
+        let mut s = ctx.stats.borrow_mut();
+        s.day_cleared_at = s.day_cleared_at.max(env.now());
+    }
+    ctx.emit(env.now(), "day_cleared", Some(("stream", 1)), &[]);
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +637,53 @@ fn log_dir() -> PathBuf {
     dir
 }
 
+/// Write the machine-readable JSONL sidecar consumed by `examples/warehouse-viz`.
+///
+/// Format: a leading `meta` line (schema version, seed, resource capacities, and
+/// the timing constants the viewer uses to lay out the scene), followed by the
+/// time-ordered `event` lines collected during the run. Written next to the
+/// human-readable `.log`, always, on every run.
+fn write_jsonl(seed: u64, ctx: &WarehouseCtx) {
+    let path = log_dir().join(format!("warehouse_run_{:02}.jsonl", seed));
+    let mut file = File::create(&path).expect("could not create jsonl file");
+
+    let meta = format!(
+        "{{\"type\":\"meta\",\"schema\":1,\"seed\":{},\"sim_duration\":{},\
+          \"resources\":{{\
+            \"dock_doors\":{{\"kind\":\"Resource\",\"capacity\":{}}},\
+            \"forklifts\":{{\"kind\":\"PreemptiveResource\",\"capacity\":{}}},\
+            \"pickers\":{{\"kind\":\"PriorityResource\",\"capacity\":{}}},\
+            \"packing\":{{\"kind\":\"Resource\",\"capacity\":{}}},\
+            \"inventory\":{{\"kind\":\"Container\",\"capacity\":{},\"initial\":{}}}}},\
+          \"constants\":{{\
+            \"unload\":{},\"qc\":{},\"putaway\":{},\"cases_per_delivery\":{},\
+            \"pick_mean\":{},\"pack\":{},\"load\":{},\"expedite_prob\":{},\
+            \"prio_truck\":{},\"prio_putaway\":{}}}}}",
+        seed,
+        num(SIM_DURATION),
+        ctx.dock_doors.capacity(),
+        ctx.forklifts.capacity(),
+        ctx.pickers.capacity(),
+        ctx.packing.capacity(),
+        num(ctx.inventory.capacity()),
+        num(STOCK_INITIAL),
+        num(UNLOAD_DURATION),
+        num(QC_DURATION),
+        num(PUTAWAY_DURATION),
+        num(CASES_PER_DELIVERY),
+        num(PICK_MEAN),
+        num(PACK_DURATION),
+        num(LOAD_DURATION),
+        num(EXPEDITE_PROB),
+        PRIO_TRUCK,
+        PRIO_PUTAWAY,
+    );
+    writeln!(file, "{}", meta).unwrap();
+    for line in ctx.rec.borrow().lines.iter() {
+        writeln!(file, "{}", line).unwrap();
+    }
+}
+
 fn run_simulation(seed: u64) -> SimResult {
     let mut env = SimEnv::with_seed(seed);
     let h = env.handle();
@@ -400,6 +696,7 @@ fn run_simulation(seed: u64) -> SimResult {
         inventory: Container::new(STOCK_CAPACITY, STOCK_INITIAL),
         log: Rc::new(RefCell::new(Vec::new())),
         stats: Rc::new(RefCell::new(Stats::default())),
+        rec: Rc::new(RefCell::new(Recorder::default())),
     };
 
     env.spawn(truck_arrivals(h.clone(), ctx.clone()));
@@ -411,6 +708,9 @@ fn run_simulation(seed: u64) -> SimResult {
     for line in ctx.log.borrow().iter() {
         writeln!(file, "{}", line).unwrap();
     }
+
+    // Machine-readable sidecar for the `warehouse-viz` playback tool.
+    write_jsonl(seed, &ctx);
 
     let s = ctx.stats.borrow();
     SimResult {

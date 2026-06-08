@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Warehouse Simulation — Playback Viewer</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ===== Stage: the SVG floor plan (also holds KPI + subtitle so it -->
+  <!--       stays in-frame when chrome is hidden for recording) ======= -->
+  <div id="stage-wrap">
+    <svg id="stage" viewBox="0 0 1280 720" preserveAspectRatio="xMidYMid meet"
+         role="img" aria-label="Warehouse floor plan playback"></svg>
+
+    <!-- Drop zone overlay, shown until a run is loaded -->
+    <div id="dropzone">
+      <div class="dz-card">
+        <div class="dz-title">Warehouse Playback</div>
+        <div class="dz-sub">Drag a <code>warehouse_run_NN.jsonl</code> here</div>
+        <div class="dz-or">or</div>
+        <button id="pick-btn" type="button">Choose file(s)…</button>
+        <input id="file-input" type="file" accept=".jsonl,application/json"
+               multiple hidden />
+        <div class="dz-hint">
+          Generate one with <code>cargo run --example warehouse</code><br />
+          (files land in <code>target/sim-logs/</code>)
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Chrome: transport controls + event ticker (hidden when -->
+  <!--       ?chrome=off) ============================================ -->
+  <div id="chrome">
+
+    <div id="transport">
+      <button id="btn-step-back" type="button" title="Previous event (←)">⏮</button>
+      <button id="btn-play" type="button" class="primary" title="Play / Pause (Space)">▶</button>
+      <button id="btn-step-fwd" type="button" title="Next event (→)">⏭</button>
+
+      <input id="scrubber" type="range" min="0" max="1000" value="0" step="1"
+             title="Seek" />
+      <span id="clock" class="mono">t&nbsp;&nbsp;&nbsp;0.0</span>
+
+      <label class="ctl">Speed
+        <select id="speed">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </label>
+
+      <label class="ctl chk">
+        <input id="loop" type="checkbox" /> Loop
+      </label>
+
+      <label class="ctl">Run
+        <select id="seed-select" disabled>
+          <option>— none —</option>
+        </select>
+      </label>
+
+      <button id="load-more" type="button" title="Load more runs">+ files</button>
+    </div>
+
+    <div id="ticker" aria-live="polite"></div>
+  </div>
+
+</div>
+
+<script src="render.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
