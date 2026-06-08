@@ -127,6 +127,7 @@ impl Container {
     ///
     /// # Panics
     /// Panics if `capacity <= 0`.
+    #[must_use]
     pub fn empty(capacity: f64) -> Self {
         Self::new(capacity, 0.0)
     }
@@ -136,6 +137,7 @@ impl Container {
     /// # Panics
     /// Panics if `capacity <= 0`, `initial_level < 0`, or
     /// `initial_level > capacity`.
+    #[must_use]
     pub fn new(capacity: f64, initial_level: f64) -> Self {
         assert!(capacity > 0.0, "Container capacity must be positive");
         assert!(
@@ -157,11 +159,13 @@ impl Container {
     }
 
     /// Current level (amount of material present).
+    #[must_use]
     pub fn level(&self) -> f64 {
         self.state.borrow().level
     }
 
     /// Maximum capacity.
+    #[must_use]
     pub fn capacity(&self) -> f64 {
         self.state.borrow().capacity
     }
@@ -173,6 +177,7 @@ impl Container {
     ///
     /// # Panics
     /// Panics if `amount <= 0`.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn put(&self, amount: f64) -> ContainerPutRequest {
         assert!(amount > 0.0, "Container::put amount must be positive");
         ContainerPutRequest {
@@ -191,6 +196,7 @@ impl Container {
     ///
     /// # Panics
     /// Panics if `amount <= 0`.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn get(&self, amount: f64) -> ContainerGetRequest {
         assert!(amount > 0.0, "Container::get amount must be positive");
         ContainerGetRequest {

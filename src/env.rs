@@ -44,6 +44,7 @@ impl SimEnv {
     /// Create a new environment seeded from OS entropy.
     ///
     /// Use [`with_seed`](SimEnv::with_seed) when reproducibility is required.
+    #[must_use]
     pub fn new() -> Self {
         SimEnv {
             state: Rc::new(RefCell::new(SimState::new())),
@@ -55,6 +56,7 @@ impl SimEnv {
     ///
     /// Given the same seed and process logic the simulation will produce
     /// identical results across runs.
+    #[must_use]
     pub fn with_seed(seed: u64) -> Self {
         SimEnv {
             state: Rc::new(RefCell::new(SimState::new())),
@@ -63,6 +65,7 @@ impl SimEnv {
     }
 
     /// Return a cloneable handle suitable for passing into spawned processes.
+    #[must_use]
     pub fn handle(&self) -> EnvHandle {
         EnvHandle {
             state: Rc::clone(&self.state),
@@ -71,6 +74,7 @@ impl SimEnv {
     }
 
     /// Current simulation time.
+    #[must_use]
     pub fn now(&self) -> f64 {
         self.state.borrow().current_time
     }
@@ -89,11 +93,13 @@ impl SimEnv {
     }
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn timeout(&self, delay: f64) -> Timeout {
         self.handle().timeout(delay)
     }
 
     /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
+    #[must_use]
     pub fn event(&self) -> (EventTrigger, EventAwaitable) {
         new_event()
     }
@@ -148,8 +154,7 @@ impl SimEnv {
 
     /// Move all pending spawns into the process table and mark them ready.
     fn drain_pending_spawns(&self) {
-        let spawns: Vec<_> =
-            std::mem::take(&mut self.state.borrow_mut().pending_spawns);
+        let spawns: Vec<_> = std::mem::take(&mut self.state.borrow_mut().pending_spawns);
         if spawns.is_empty() {
             return;
         }
@@ -177,9 +182,7 @@ impl SimEnv {
         let ready_queue = Arc::clone(&self.state.borrow().ready_queue);
 
         loop {
-            let ready: Vec<usize> = std::mem::take(
-                &mut *ready_queue.lock().unwrap()
-            );
+            let ready: Vec<usize> = std::mem::take(&mut *ready_queue.lock().unwrap());
 
             if ready.is_empty() {
                 break;
@@ -206,6 +209,7 @@ impl SimEnv {
 
 impl EnvHandle {
     /// Current simulation time.
+    #[must_use]
     pub fn now(&self) -> f64 {
         self.state.borrow().current_time
     }
@@ -218,17 +222,20 @@ impl EnvHandle {
     /// ```ignore
     /// let duration = env.rng().sample(Exp::new(1.0 / 20.0).unwrap());
     /// ```
+    #[must_use = "an RngGuard holds a mutable borrow of the env RNG; bind or use it directly"]
     pub fn rng(&self) -> impl rand::RngCore + '_ {
         RngGuard(self.rng.borrow_mut())
     }
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn timeout(&self, delay: f64) -> Timeout {
         let deadline = self.state.borrow().current_time + delay;
         Timeout::new(deadline, self.clone())
     }
 
     /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
+    #[must_use]
     pub fn event(&self) -> (EventTrigger, EventAwaitable) {
         new_event()
     }
@@ -263,9 +270,15 @@ impl EnvHandle {
 struct RngGuard<'a>(std::cell::RefMut<'a, StdRng>);
 
 impl RngCore for RngGuard<'_> {
-    fn next_u32(&mut self) -> u32 { self.0.next_u32() }
-    fn next_u64(&mut self) -> u64 { self.0.next_u64() }
-    fn fill_bytes(&mut self, dest: &mut [u8]) { self.0.fill_bytes(dest) }
+    fn next_u32(&mut self) -> u32 {
+        self.0.next_u32()
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        self.0.fill_bytes(dest)
+    }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
         self.0.try_fill_bytes(dest)
     }

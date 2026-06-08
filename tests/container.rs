@@ -457,17 +457,17 @@ fn level_and_capacity_accessors() {
 #[test]
 #[should_panic(expected = "capacity must be positive")]
 fn zero_capacity_panics() {
-    Container::new(0.0, 0.0);
+    let _ = Container::new(0.0, 0.0);
 }
 
 #[test]
 #[should_panic(expected = "capacity must be positive")]
 fn negative_capacity_panics() {
-    Container::new(-1.0, 0.0);
+    let _ = Container::new(-1.0, 0.0);
 }
 
 #[test]
 #[should_panic(expected = "initial_level must not exceed capacity")]
 fn initial_level_exceeds_capacity_panics() {
-    Container::new(5.0, 6.0);
+    let _ = Container::new(5.0, 6.0);
 }

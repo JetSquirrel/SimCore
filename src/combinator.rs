@@ -27,6 +27,7 @@ impl AnyOf {
     ///
     /// Panics if `futures` is empty — waiting for "any of nothing" is a logic
     /// error.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn new(futures: Vec<Pin<Box<dyn Future<Output = ()>>>>) -> Self {
         assert!(!futures.is_empty(), "AnyOf requires at least one future");
         AnyOf { futures }
@@ -66,6 +67,7 @@ impl AllOf {
     /// Create an `AllOf` combinator from a list of futures.
     ///
     /// Resolves immediately if `futures` is empty.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn new(futures: Vec<Pin<Box<dyn Future<Output = ()>>>>) -> Self {
         AllOf { futures }
     }

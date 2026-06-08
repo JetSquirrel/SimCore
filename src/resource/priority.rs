@@ -88,6 +88,7 @@ impl PriorityResource {
     /// # Panics
     ///
     /// Panics if `capacity` is zero.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "PriorityResource capacity must be at least 1");
         PriorityResource {
@@ -107,6 +108,7 @@ impl PriorityResource {
     /// unit becomes free.
     ///
     /// The returned [`PriorityResourceGuard`] releases the unit when dropped.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn request(&self, priority: u32) -> PriorityResourceRequest {
         PriorityResourceRequest {
             state: Rc::clone(&self.state),
@@ -118,11 +120,13 @@ impl PriorityResource {
     }
 
     /// Number of units currently in use.
+    #[must_use]
     pub fn in_use(&self) -> usize {
         self.state.borrow().in_use
     }
 
     /// Total capacity of this resource pool.
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.state.borrow().capacity
     }

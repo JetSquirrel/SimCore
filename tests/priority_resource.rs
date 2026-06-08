@@ -227,5 +227,5 @@ fn multi_capacity_mixed_priorities() {
 #[test]
 #[should_panic(expected = "capacity must be at least 1")]
 fn zero_capacity_panics() {
-    PriorityResource::new(0);
+    let _ = PriorityResource::new(0);
 }

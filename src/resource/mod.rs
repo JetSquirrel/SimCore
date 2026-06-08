@@ -46,6 +46,7 @@ impl Resource {
     ///
     /// # Panics
     /// Panics if `capacity` is zero.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "Resource capacity must be at least 1");
         Resource {
@@ -61,6 +62,7 @@ impl Resource {
     /// otherwise suspends the calling process until one is released.
     ///
     /// The returned [`ResourceGuard`] releases the unit when dropped.
+    #[must_use = "futures do nothing unless awaited"]
     pub fn request(&self) -> ResourceRequest {
         ResourceRequest {
             state: Rc::clone(&self.state),
@@ -70,11 +72,13 @@ impl Resource {
     }
 
     /// Number of units currently in use.
+    #[must_use]
     pub fn in_use(&self) -> usize {
         self.state.borrow().in_use
     }
 
     /// Total capacity of this resource pool.
+    #[must_use]
     pub fn capacity(&self) -> usize {
         self.state.borrow().capacity
     }

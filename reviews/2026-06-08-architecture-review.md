@@ -70,14 +70,16 @@ Regression test `cascade_terminates_on_net_zero_level_delta` added.
 
 ---
 
-## 3. API ergonomics (vs SimPy, Rust-idiomatic) — **OPEN**
+## 3. API ergonomics (vs SimPy, Rust-idiomatic) — **PARTIALLY OPEN**
 
-The API is already clean. Targeted suggestions, none blocking:
+The API is already clean. Targeted suggestions:
 
 - **Missing `#[must_use]`** on request/future constructors and accessors (`Resource::request`,
   `Container::get`/`put`, `AnyOf`/`AllOf`, `now()`/`level()` …). Pedantic clippy flagged ~26 sites.
-  For a library, `#[must_use]` on the futures catches a very common bug class — forgetting `.await`.
-  **Recommended; cheap, high value.**
+  **FIXED:** all 26 public `src/` sites now carry `#[must_use]` — future-returning methods use an
+  "futures do nothing unless awaited" hint, accessors/constructors a plain attribute. `spawn` is
+  deliberately left un-annotated (dropping its `ProcessHandle` is the idiomatic detach). Six
+  `#[should_panic]` constructor tests were updated to bind the now-`must_use` result.
 - **Doc-tests are all `ignore`d** (`combinator.rs`, `env.rs`, …). They are not compiled, so examples
   can silently rot. Converting a few to real compiling doc-tests would protect the public surface.
 - **`PriorityResource::request(priority: u32)`** uses a magic integer. A `Priority(u32)` newtype or
@@ -100,9 +102,11 @@ change behind the existing Criterion suite.
 ## 5. Robustness / smaller issues — **PARTIALLY OPEN**
 
 - **Process panics abort the entire run** (verified: a panic in one process unwinds out of
-  `env.run()`, stranding all others). SPEC §4.3 says *"Panicking inside a process terminates that
-  process and propagates as a simulation error"*, which does not match the whole-run abort. **Action:
-  reconcile SPEC with reality, or (post-MVP) wrap each poll in `catch_unwind`.** — OPEN.
+  `env.run()`, stranding all others). SPEC §4.3 said *"Panicking inside a process terminates that
+  process and propagates as a simulation error"*, which did not match the whole-run abort.
+  **FIXED (docs):** SPEC §4.3 now states the true whole-run-abort behaviour, and per-process
+  `catch_unwind` isolation is tracked as roadmap item §6.6. The behavioural change itself remains
+  deferred. — DOCS RECONCILED; behaviour OPEN.
 - **`run_until` sets `current_time = until`** even when the queue empties earlier (`env.rs`). Defensible
   (time advances to the boundary) but subtle: a process scheduled exactly at `until` is not run, yet
   `now()` reports `until`. Worth a doc note. — OPEN.
@@ -125,8 +129,8 @@ change behind the existing Criterion suite.
 
 1. **Fix the Container put-cascade bug + regression test** (Finding 1) — *done this cycle.*
 2. **Harden `trigger_cascade` termination** (Finding 2) — *done this cycle.*
-3. **Reconcile panic-semantics docs** in SPEC §4.3 (Finding 5) — truthfulness.
-4. **Add `#[must_use]`** to futures/accessors (Finding 3) — catches user bugs cheaply.
+3. **Reconcile panic-semantics docs** in SPEC §4.3 (Finding 5) — *done; truthfulness restored, behaviour deferred to §6.6.*
+4. **Add `#[must_use]`** to futures/accessors (Finding 3) — *done; 26 sites annotated.*
 5. *(When growing)* extract the shared `WaitQueue` helper (Finding 6) before adding
    `PreemptiveResource` / `Store`.
 

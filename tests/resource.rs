@@ -184,5 +184,5 @@ fn in_use_and_capacity_counters() {
 #[test]
 #[should_panic(expected = "capacity must be at least 1")]
 fn zero_capacity_panics() {
-    Resource::new(0);
+    let _ = Resource::new(0);
 }

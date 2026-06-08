@@ -156,7 +156,11 @@ async fn patient_journey(env: EnvHandle, resources: HospitalResources) {
 Key design choices:
 - Processes are spawned with `env.spawn(future)` and run lazily by the scheduler.
 - `EnvHandle` is `Clone` — processes clone it rather than borrowing.
-- Panicking inside a process terminates that process and propagates as a simulation error.
+- Panicking inside a process currently unwinds the entire `run()` call: the executor polls
+  processes without `catch_unwind`, so a panic aborts the whole simulation rather than terminating
+  just the offending process. Per-process isolation (catch the panic, drop only that process, and
+  surface it as a simulation error) is a post-MVP item — see [§6](#6-post-mvp-roadmap). Until then,
+  treat a process panic as fatal to the run.
 - `spawn` returns a [`ProcessHandle<T>`](#4-4-core-types) that resolves to the
   process's return value. Dropping the handle detaches the process
   (fire-and-forget). `ProcessHandle<T>` is not `Clone` — broadcast patterns
@@ -498,6 +502,9 @@ Listed in priority order:
 5. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
    only when process logic can be expressed as data-parallel kernels (e.g., pure queuing networks).
    Requires further design work; depends on CUDA Rust bindings maturity.
+6. **Per-process panic isolation** — wrap each process poll in `catch_unwind` so a panic terminates
+   only that process (surfaced as a simulation error) instead of unwinding the entire `run()`. See
+   [§4.3](#43-process-model).
 
 ---
 

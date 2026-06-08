@@ -64,7 +64,7 @@ fn any_of_already_fired_event() {
 #[test]
 #[should_panic(expected = "AnyOf requires at least one future")]
 fn any_of_empty_panics() {
-    AnyOf::new(vec![]);
+    let _fut = AnyOf::new(vec![]);
 }
 
 // ---------------------------------------------------------------------------
