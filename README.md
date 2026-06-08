@@ -61,6 +61,11 @@ simu = { path = ".", features = ["monte-carlo"] }
 | `Timeout` | Future that resolves after a simulated delay (`h.timeout(5.0).await`) |
 | `EventTrigger` / `EventAwaitable` | Paired handles for manual inter-process signalling |
 | `Resource` / `ResourceGuard` | FIFO capacity-limited pool; RAII release on guard drop |
+| `PriorityResource` | Priority-scheduled pool (lower number = higher priority; FIFO within a level) |
+| `PreemptiveResource` / `PreemptiveGuard` | Priority pool whose in-use units can be preempted by a higher-priority request (cooperative-at-yield) |
+| `Container` | Reservoir of continuous quantity (`put` / `get`, FIFO waiters) |
+| `ProcessHandle<T>` | Observable spawn; `.await` for the return value, drop to detach |
+| `AnyOf` / `AllOf` | Future combinators via the `any_of!` / `all_of!` macros |
 
 ## Building
 

@@ -25,7 +25,7 @@ use super::wait_queue::WaitQueue;
 /// and all clones share the same pool. It is `!Send + !Sync` — consistent with
 /// `SimEnv`.
 ///
-/// Internally this is a [`WaitQueue<u32>`](super::wait_queue::WaitQueue): the
+/// Internally this is a `WaitQueue<u32>` (a `pub(crate)` helper): the
 /// `u32` priority is the ordering key, and the queue's internal sequence
 /// counter provides FIFO tie-breaking within a level.
 #[derive(Clone)]

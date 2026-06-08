@@ -7,6 +7,7 @@ cargo test                   # all tests
 cargo test --test timeout    # timeout tests only
 cargo test --test event      # event tests only
 cargo test --test resource   # resource tests only
+cargo test --test preemptive_resource  # preemptive-resource tests only
 cargo test --test system     # system tests only
 ```
 
@@ -41,7 +42,9 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (66 integration tests + 3 inline unit tests).
+Current coverage: **~98% lines** across all library source files (79 integration tests + 8 inline unit tests).
+(The per-file percentages below were last measured before the `WaitQueue`/`PreemptiveResource`
+additions; re-run `cargo llvm-cov` to refresh.)
 
 | File | Line coverage |
 |---|---|
@@ -50,6 +53,8 @@ Current coverage: **~98% lines** across all library source files (66 integration
 | `executor/waker.rs` | 100% |
 | `event.rs` | 100% |
 | `resource/mod.rs` | 100% |
+| `resource/wait_queue.rs` | covered by inline unit tests |
+| `resource/preemptive.rs` | covered by `tests/preemptive_resource.rs` |
 | `monte_carlo.rs` | 100% |
 | `env.rs` | 99% |
 | `executor/queue.rs` | 90% |
@@ -121,6 +126,25 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 | `in_use_and_capacity_counters` | `in_use()` and `capacity()` track correctly throughout the lifecycle |
 | `multi_capacity_mixed_priorities` | Capacity=2 with four interleaved priorities; on simultaneous release both priority-0 waiters acquire ahead of priority-1 |
 | `zero_capacity_panics` | `PriorityResource::new(0)` panics with the expected message |
+
+### tests/preemptive_resource.rs — 11 tests
+
+Covers `PreemptiveResource`: cooperative-at-yield preemption, victim selection,
+and capacity accounting under eviction.
+
+| Test | What it verifies |
+|---|---|
+| `acquire_immediately_when_free` | Free capacity → resolves without suspending or preempting |
+| `higher_priority_preempts_holder_immediately` | A higher-priority request evicts a holder at its yield point (t=1, not after the holder's 100-unit service) |
+| `equal_priority_does_not_preempt` | An equal-priority request does not preempt; it queues and waits |
+| `lower_priority_request_waits_for_release` | A lower-priority request cannot preempt; waits for normal release |
+| `preempts_lowest_priority_holder_among_many` | With capacity 2, the priority-8 holder is evicted, not the priority-3 one |
+| `tie_break_preempts_most_recently_acquired` | Among equal-lowest-priority holders, the most recently acquired is evicted |
+| `preemptor_blocks_when_no_victim_available` | Equal-priority request with no valid victim blocks until release |
+| `preempted_guard_drop_does_not_double_release` | Dropping an already-preempted guard is a no-op (no `in_use` underflow / spurious free) |
+| `release_wakes_blocked_waiter_in_priority_order` | Plain blocked-waiter path still serves in priority order (delegated to `WaitQueue`) |
+| `zero_capacity_panics` | `PreemptiveResource::new(0)` panics with the expected message |
+| `woken_waiter_losing_same_tick_race_is_not_starved` | Two equal-priority requests race for one freed unit at the same tick; the loser stays queued and is still served later — neither is starved |
 
 ### tests/combinator.rs — 8 tests
 
@@ -214,6 +238,20 @@ which cannot be reached from integration tests (the type is `pub(crate)`).
 | `partial_eq_same_time_and_seq` | Equal time and seq → equal |
 | `partial_eq_different_seq` | Same time, different seq → not equal |
 | `partial_eq_different_time` | Different time → not equal |
+
+### src/resource/wait_queue.rs — 5 inline unit tests
+
+Inline `#[cfg(test)]` module exercising the `pub(crate)` `WaitQueue<K>` helper
+directly (it is not reachable from integration tests). Uses a safe
+`std::task::Wake` recorder to observe wake order.
+
+| Test | What it verifies |
+|---|---|
+| `try_acquire_respects_capacity` | `try_acquire`/`release` track `in_use` against capacity |
+| `fifo_order_for_unit_key` | `WaitQueue<()>` serves waiters in pure insertion (FIFO) order |
+| `priority_order_then_fifo_within_level` | `WaitQueue<u32>` serves lowest key first, FIFO within a level |
+| `release_skips_canceled_waiter` | A canceled top-priority entry is skipped so the next live waiter is woken |
+| `release_with_only_canceled_waiters_wakes_nobody` | All-canceled queue wakes no one but still returns the unit |
 
 ## Benchmark groups (benches/simulation.rs)
 

@@ -142,8 +142,25 @@ change behind the existing Criterion suite.
 
 - Finding 1 — FIXED: immediate `put` path now runs the full `trigger_cascade`.
 - Finding 2 — FIXED: cascade termination now driven by "work done" flags, not float-epsilon.
-- Tests — 2 regression tests added to `tests/container.rs`
-  (`immediate_put_wakes_blocked_put_after_get_drains`,
-  `cascade_terminates_on_net_zero_level_delta`). Both were confirmed to **fail** against the
-  pre-fix code and **pass** after the fix. Suite is now 71 passing, clippy-clean with and without
-  the `monte-carlo` feature.
+- Finding 5 — DOCS RECONCILED: SPEC §4.3 now states the true whole-run panic-abort behaviour;
+  per-process `catch_unwind` isolation tracked as roadmap §6.
+- Finding 3 — FIXED: `#[must_use]` added to all 26 public `src/` accessors/constructors/futures.
+- Finding 6 — FIXED (wake-and-retry half): `resource::wait_queue::WaitQueue<K>` extracted and now
+  backs both `Resource` (`WaitQueue<()>`) and `PriorityResource` (`WaitQueue<u32>`), with 5 direct
+  unit tests.
+- Tests — 2 Container regression tests added (`immediate_put_wakes_blocked_put_after_get_drains`,
+  `cascade_terminates_on_net_zero_level_delta`), both confirmed to fail pre-fix; 5 `WaitQueue` unit
+  tests; 10 `PreemptiveResource` integration tests.
+
+## Post-review feature work
+
+- **`PreemptiveResource` delivered** (SPEC §6 item 1 → done). Priority pool with
+  cooperative-at-yield preemption built on the new `WaitQueue<u32>` plus a holder registry and the
+  existing event mechanism. A higher-priority request evicts the lowest-priority strictly-worse
+  holder (tie → most-recently-acquired), transferring the unit immediately and firing the victim's
+  `preempted()` signal; victims race work via `any_of![work, guard.preempted()]`. 11 integration
+  tests cover immediate preemption, equal/lower-priority non-preemption, multi-holder victim choice,
+  tie-break, no-victim blocking, double-release safety, priority-ordered fallback, and a
+  same-tick wake-race starvation probe.
+
+Suite is now **87 passing**, clippy-clean with and without the `monte-carlo` feature.

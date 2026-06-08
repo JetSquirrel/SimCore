@@ -224,8 +224,13 @@ completion.
 
 Listed in priority order (see [SPEC.md §6](SPEC.md) for full details):
 
-1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-2. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-3. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
-4. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-5. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+1. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+2. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time.
+3. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+4. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU.
+5. **Per-process panic isolation** — `catch_unwind` per poll so a panic ends only that process.
+
+**Delivered since MVP:**
+
+- **`PreemptiveResource`** — priority pool with cooperative-at-yield preemption
+  (`guard.preempted()` / `is_preempted()`), built on the shared `WaitQueue<u32>`. See SPEC §4.5.

@@ -8,6 +8,7 @@ pub mod container;
 pub use container::{Container, ContainerGetRequest, ContainerPutRequest};
 
 mod preemptive;
+pub use preemptive::{PreemptiveGuard, PreemptiveRequest, PreemptiveResource};
 pub mod priority;
 pub use priority::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
 

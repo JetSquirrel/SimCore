@@ -21,7 +21,7 @@ When changing behaviour, keep `SPEC.md` and `API.md` in sync.
 
 ```bash
 cargo build
-cargo test                        # 76 passing tests across unit + integration suites
+cargo test                        # 87 passing tests across unit + integration suites
 cargo test <test_name>            # run a single test
 cargo run --example hospital      # ER patient-flow simulation
 cargo run --example brewery       # brewery / process-automation simulation
@@ -51,7 +51,7 @@ simu/
 │       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared wake-and-retry waiter bookkeeping
 │       ├── priority.rs   # PriorityResource (priority heap, FIFO within a level)
 │       ├── container.rs  # Container (continuous quantity, FIFO put/get)
-│       └── preemptive.rs # PreemptiveResource — STUB only (post-MVP, not implemented)
+│       └── preemptive.rs # PreemptiveResource — priority pool with cooperative-at-yield preemption
 ├── examples/
 │   ├── hospital.rs / hospital.md
 │   └── brewery.rs  / brewery.md
@@ -94,6 +94,7 @@ simu/
 | `EventTrigger` / `EventAwaitable` | Manual inter-process signalling. `EventAwaitable` is `Clone` (multi-waiter); fire-before-await latch; `fire()` consumes the trigger |
 | `Resource` / `ResourceGuard` | FIFO-queued, capacity-limited pool; RAII release on guard drop |
 | `PriorityResource` | Priority-scheduled pool (lower number = higher priority; FIFO within a level) |
+| `PreemptiveResource` / `PreemptiveGuard` | Priority pool whose in-use units can be evicted by a higher-priority request; cooperative-at-yield (`guard.preempted()` / `is_preempted()`) |
 | `Container` | Reservoir of continuous quantity (`put` / `get`, FIFO waiters) |
 | `ProcessHandle<T>` | Observable spawn (tokio-`JoinHandle`-style): `await` for the value, drop to detach. Not `Clone`. |
 | `AnyOf` / `AllOf` | Future combinators; built via the `any_of!` / `all_of!` macros |
@@ -154,13 +155,17 @@ panic-on-misuse only. No async runtime dependency — the executor is self-conta
 
 ## Status
 
-**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (76 passing tests),
+**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (87 passing tests),
 and clippy-clean: `SimEnv`/event queue, `Timeout`, manual `Event` (multi-waiter + fire-before-await
 latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `ProcessHandle<T>`,
 `AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG, deterministic tie-breaking,
 `monte_carlo::run`, both examples, integration tests, and Criterion benches.
 
+**Delivered post-MVP:**
+
+- `PreemptiveResource` — priority pool with cooperative-at-yield preemption (`src/resource/preemptive.rs`).
+
 **Post-MVP (not yet implemented)** — see `SPEC.md §6`:
 
-- `PreemptiveResource` — `src/resource/preemptive.rs` is a one-line placeholder stub only.
 - `Interrupt`, `RealtimeEnvironment`, `Store` / `FilterStore`, GPU/CUDA acceleration.
+- Per-process panic isolation (a process panic currently unwinds the whole `run()`).

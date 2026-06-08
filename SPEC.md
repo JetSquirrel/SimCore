@@ -356,11 +356,62 @@ Both `put` and `get` suspend when they cannot immediately complete. Waiters are
 served **FIFO**. The level change is committed eagerly by the wake cascade (not
 on re-poll), so processes always see the correct level after `.await`.
 
+**`PreemptiveResource`** is a priority pool whose *in-use* units can be evicted
+by a higher-priority request:
+
+```rust
+pub struct PreemptiveResource { /* Clone, !Send+!Sync */ }
+
+impl PreemptiveResource {
+    /// Create a pool of `capacity` units. Panics if `capacity == 0`.
+    pub fn new(capacity: usize) -> Self;
+
+    /// Request a unit at `priority` (lower = higher priority). Resolves when a
+    /// unit is free OR a strictly lower-priority holder can be preempted;
+    /// otherwise queues in priority order.
+    pub fn request(&self, priority: u32) -> PreemptiveRequest;
+
+    pub fn in_use(&self) -> usize;
+    pub fn capacity(&self) -> usize;
+}
+
+pub struct PreemptiveGuard { /* RAII; releases on drop unless preempted */ }
+
+impl PreemptiveGuard {
+    /// Future that resolves when this unit is preempted — race it against work.
+    pub fn preempted(&self) -> EventAwaitable;
+    /// Synchronous check after a race.
+    pub fn is_preempted(&self) -> bool;
+}
+```
+
+When all units are busy, a higher-priority request **evicts** the holder with
+the lowest priority that is strictly worse than its own (ties broken toward the
+most-recently-acquired holder, which has made the least progress); the unit
+transfers immediately without passing through the queue.
+
+Preemption is **cooperative-at-yield**, not forcible. A discrete-event executor
+cannot unwind a process suspended on an unrelated future, so — exactly as with
+SimPy interrupts and all Rust async cancellation — the victim observes
+preemption at its next yield point and is expected to bail:
+
+```rust
+let guard = crew.request(2).await;
+any_of![env.timeout(service_time), guard.preempted()].await;
+if guard.is_preempted() {
+    return;            // higher-priority work took the unit; clean up
+}
+// otherwise completed normally; dropping `guard` releases the unit
+```
+
+A victim that never checks its signal simply runs to completion (it has already
+surrendered the unit on the books, so it can no longer block anyone). Dropping a
+guard that was already preempted is a no-op — the unit is gone.
+
 **Remaining post-MVP resource types:**
 
 | Type                  | Status   |
 |-----------------------|----------|
-| `PreemptiveResource`  | Post-MVP |
 | `Store` / `FilterStore` | Post-MVP |
 
 ### 4.6 Monte Carlo Parallelism
@@ -426,7 +477,7 @@ ascending `(key, seq)` order, so:
 - `PriorityResource` is `WaitQueue<u32>` — lower key first, FIFO within a level.
 
 This keeps the `registered` / `canceled` / release-skip logic in one place (and
-gives the post-MVP `PreemptiveResource` a ready-made base). `Container` keeps its
+gives `PreemptiveResource` its capacity/queue base). `Container` keeps its
 own two-sided amount-based cascade — its commit-at-wake model does not fit the
 wake-and-retry shape — see `trigger_cascade` below.
 
@@ -480,7 +531,7 @@ misuse. This makes deterministic sampling safe by construction.
 
 ## 5. MVP Feature Set
 
-**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (76 passing tests),
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (87 passing tests),
 clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
@@ -503,7 +554,7 @@ clippy-clean (`-D warnings`), and benchmarked.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Test suite (76 unit + integration)  | Done ✅     |
+| Test suite (87 unit + integration)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
@@ -512,16 +563,17 @@ clippy-clean (`-D warnings`), and benchmarked.
 
 Listed in priority order:
 
-1. **`PreemptiveResource`** — higher-priority request can preempt a current holder.
-2. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
-3. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
-4. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
-5. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
+1. **`Interrupt`** — one process can interrupt another (e.g., emergency preemption).
+2. **`RealtimeEnvironment`** — synchronise simulated time to wall-clock time (for training/demos).
+3. **`Store` / `FilterStore`** — discrete-item queues with optional filter predicate.
+4. **GPU/CUDA acceleration** — batch evaluation of independent sub-simulations on GPU. Applicable
    only when process logic can be expressed as data-parallel kernels (e.g., pure queuing networks).
    Requires further design work; depends on CUDA Rust bindings maturity.
-6. **Per-process panic isolation** — wrap each process poll in `catch_unwind` so a panic terminates
+5. **Per-process panic isolation** — wrap each process poll in `catch_unwind` so a panic terminates
    only that process (surfaced as a simulation error) instead of unwinding the entire `run()`. See
    [§4.3](#43-process-model).
+
+**Delivered since MVP:** `PreemptiveResource` (cooperative-at-yield preemption — see [§4.5](#45-resource-model-mvp)).
 
 ---
 

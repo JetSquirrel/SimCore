@@ -117,6 +117,48 @@ r.request(priority: u32) -> PriorityResourceRequest  // await → PriorityResour
 
 ---
 
+## `PreemptiveResource`
+
+Priority pool whose **in-use** units can be evicted by a higher-priority
+request. Like `PriorityResource`, lower number = higher priority and blocked
+waiters are served in priority order; *unlike* it, when all units are busy a
+higher-priority request preempts the lowest-priority holder that is strictly
+worse than itself (ties → most-recently-acquired holder) and takes its unit
+immediately.
+
+```rust
+use simu::{PreemptiveResource, any_of};
+
+let r = PreemptiveResource::new(capacity);  // panics if capacity == 0
+
+r.capacity()             -> usize
+r.in_use()               -> usize
+r.request(priority: u32) -> PreemptiveRequest   // await → PreemptiveGuard
+
+// PreemptiveGuard:
+guard.preempted()    -> EventAwaitable   // resolves when this unit is preempted
+guard.is_preempted() -> bool             // synchronous check
+```
+
+Preemption is **cooperative-at-yield**: the executor cannot unwind a suspended
+process, so the victim observes preemption at its next `.await` and is expected
+to bail. Race your work against the signal:
+
+```rust
+let guard = r.request(2).await;
+any_of![env.timeout(service_time), guard.preempted()].await;
+if guard.is_preempted() {
+    return;            // higher-priority work took the unit; clean up and exit
+}
+// otherwise finished normally; dropping `guard` releases the unit
+```
+
+A victim that never checks its signal runs to completion (it has already
+surrendered the unit, so it blocks no one). Dropping an already-preempted guard
+is a no-op. `PreemptiveResource: Clone` — all clones share the same pool.
+
+---
+
 ## `Container`
 
 Continuous quantity with bounded capacity; separate FIFO queues for producers and consumers.
@@ -196,7 +238,7 @@ let results: Vec<R> = monte_carlo::run(seeds, |seed| {
 |------|--------|
 | `!Send + !Sync` | `SimEnv`, `Resource`, `Container` etc. cannot cross thread boundaries; use `monte_carlo::run` for parallelism |
 | RNG borrow | `handle.rng()` returns a short-lived guard — sample immediately, do not hold across `.await` |
-| RAII guards | `ResourceGuard` / `PriorityResourceGuard` release their unit on drop; drop early to free sooner |
+| RAII guards | `ResourceGuard` / `PriorityResourceGuard` / `PreemptiveGuard` release their unit on drop; drop early to free sooner (a *preempted* `PreemptiveGuard` drop is a no-op) |
 | Cancelled requests | Dropping a `request().await` future mid-suspension removes it from the queue |
 | Determinism | Same seed + same logic → identical event sequence every run |
 | Panics | Programming misuse (wrong capacity, empty combinator, etc.) panics; don't catch them |
