@@ -148,10 +148,11 @@ panic-on-misuse only. No async runtime dependency — the executor is self-conta
 
 ## Status
 
-All MVP features in `SPEC.md §5` are implemented: `SimEnv`/event queue, `Timeout`, manual `Event`
-(multi-waiter + fire-before-await latch), `Resource` (FIFO + RAII guard), `PriorityResource`,
-`Container`, `ProcessHandle<T>`, `AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG,
-deterministic tie-breaking, `monte_carlo::run`, both examples, integration tests, and Criterion benches.
+**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (71 passing tests),
+and clippy-clean: `SimEnv`/event queue, `Timeout`, manual `Event` (multi-waiter + fire-before-await
+latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `ProcessHandle<T>`,
+`AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG, deterministic tie-breaking,
+`monte_carlo::run`, both examples, integration tests, and Criterion benches.
 
 **Post-MVP (not yet implemented)** — see `SPEC.md §6`:
 

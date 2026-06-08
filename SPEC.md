@@ -459,7 +459,8 @@ misuse. This makes deterministic sampling safe by construction.
 
 ## 5. MVP Feature Set
 
-All MVP features are implemented.
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (71 passing tests),
+clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
 |------------------------------------|-------------|
@@ -481,7 +482,7 @@ All MVP features are implemented.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Integration test suite (66 tests)  | Done ✅     |
+| Integration test suite (71 tests)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---
