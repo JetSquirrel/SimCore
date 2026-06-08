@@ -78,7 +78,7 @@ Adds parallel multi-run support.
 - `SimEnv` is `!Send`, so it is created *inside* each closure — never crosses thread boundaries.
 - Results are returned in seed order (one element per seed).
 
-**Hospital example:** runs 10 simulations with different seeds; each run writes to `hospital_run_<N>.log`; `main()` prints a summary table of patient throughput and resource wait times.
+**Hospital example:** runs 10 simulations with different seeds; each run writes to `target/sim-logs/run_<N>.log`; `main()` prints a summary table of patient throughput and resource wait times.
 
 ---
 

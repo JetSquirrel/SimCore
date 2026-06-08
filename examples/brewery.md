@@ -90,8 +90,8 @@ Run it:
 cargo run --example brewery --release
 ```
 
-Each seed writes a full event log to `brewery_run_00.log` … `brewery_run_09.log`;
-the summary table prints to stdout.
+Each seed writes a full event log to `target/sim-logs/brewery_run_00.log` …
+`target/sim-logs/brewery_run_09.log`; the summary table prints to stdout.
 
 ---
 

@@ -169,7 +169,11 @@ Both macros accept any `Future<Output = ()>`. Use `.discard()` on a `ProcessHand
 
 ## Monte Carlo
 
-Feature flag: `simu = { path = "…", features = ["monte-carlo"] }`
+`monte_carlo::run` is always available. By default it spawns one `std::thread` per seed. Enabling the
+`monte-carlo` feature switches the backend to rayon's bounded thread pool, which scales better for
+large seed counts:
+
+`simu = { path = "…", features = ["monte-carlo"] }`
 
 ```rust
 use simu::monte_carlo;

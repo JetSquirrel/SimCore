@@ -300,6 +300,132 @@ fn cascade_satisfies_multiple_gets() {
     assert_eq!(*log.borrow(), vec!["G1:1", "G2:1", "G3:1", "G4:1"]);
 }
 
+// Regression (review 2026-06-08, Finding 1): the immediate-`put` path used to
+// call only `wake_get_waiters`, so a get it woke could drain the level and free
+// space for a blocked *put*-waiter that was then never woken. The immediate-put
+// path must run the full `trigger_cascade`.
+//
+// Setup: cap 10, level 6.
+//   - P_block: put(5) -> 6+5=11 > 10 -> blocks as a put-waiter.
+//   - G_block: get(8) -> 6 < 8       -> blocks as a get-waiter.
+//   - trigger: an immediate put(2) at t=1 raises level 6 -> 8, which wakes
+//     G_block (level 8 -> 0). That frees enough space for P_block (0+5 <= 10),
+//     which must now be serviced in the same cascade pass.
+#[test]
+fn immediate_put_wakes_blocked_put_after_get_drains() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::new(10.0, 6.0);
+    let log = new_log();
+
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.put(5.0).await;
+            log.borrow_mut().push(format!("P_block:{}", h.now()));
+        });
+    }
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(8.0).await;
+            log.borrow_mut().push(format!("G_block:{}", h.now()));
+        });
+    }
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(1.0).await;
+            c.put(2.0).await;
+        });
+    }
+
+    env.run();
+
+    let entries = log.borrow();
+    assert!(
+        entries.contains(&"G_block:1".to_string()),
+        "get waiter must be served, got: {:?}",
+        entries,
+    );
+    assert!(
+        entries.contains(&"P_block:1".to_string()),
+        "put waiter must NOT be stranded after the woken get drains the level, got: {:?}",
+        entries,
+    );
+    // 6 (initial) +2 (trigger) -8 (G_block) +5 (P_block) = 5.
+    assert_eq!(c.level(), 5.0);
+}
+
+// Regression (review 2026-06-08, Finding 2): `trigger_cascade` must keep looping
+// while *any* waiter is serviced, even when a pass nets a zero level change.
+// Termination must be driven by "work done", never by a float-level delta.
+//
+// Setup: cap 12, level 5. A blocked get and a blocked put coexist because
+// get_amount + put_amount (8 + 8) exceeds capacity, so 4 < level < 8 blocks both.
+//   - GA: get(8) -> 5 < 8 blocks (get-waiter #1)
+//   - GB: get(8) -> blocks            (get-waiter #2)
+//   - PA: put(8) -> 5+8=13 > 12 blocks (put-waiter #1)
+//   - trigger: immediate put(3) at t=1 raises level 5 -> 8.
+//
+// First cascade pass: GA takes 8 (8 -> 0), then PA puts 8 (0 -> 8) — a net-zero
+// level change for the pass. A delta-based loop would break here, stranding GB
+// even though level is now 8 >= 8. A work-driven loop runs another pass and
+// serves GB.
+#[test]
+fn cascade_terminates_on_net_zero_level_delta() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::new(12.0, 5.0);
+    let log = new_log();
+
+    // GA, GB: two get(8) waiters (registered in this order).
+    for name in ["GA", "GB"] {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(8.0).await;
+            log.borrow_mut().push(format!("{}:{}", name, h.now()));
+        });
+    }
+    // PA: a put(8) waiter — blocks because 5 + 8 > 12.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.put(8.0).await;
+            log.borrow_mut().push(format!("PA:{}", h.now()));
+        });
+    }
+    // Trigger: an immediate put(3) at t=1 (5 + 3 = 8 <= 12, so it does not block).
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(1.0).await;
+            c.put(3.0).await;
+        });
+    }
+
+    env.run();
+
+    let entries = log.borrow();
+    assert!(entries.contains(&"GA:1".to_string()), "GA must be served: {:?}", entries);
+    assert!(entries.contains(&"PA:1".to_string()), "PA must be served: {:?}", entries);
+    assert!(
+        entries.contains(&"GB:1".to_string()),
+        "GB must NOT be stranded by a net-zero cascade pass: {:?}",
+        entries,
+    );
+    // 5 +3 (trigger) -8 (GA) +8 (PA) -8 (GB) = 0.
+    assert_eq!(c.level(), 0.0);
+}
+
 // ---------------------------------------------------------------------------
 // Accessors
 // ---------------------------------------------------------------------------

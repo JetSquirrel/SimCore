@@ -18,8 +18,8 @@ Run it:
 cargo run --example hospital
 ```
 
-Each seed writes a full event log to `run_00.log` … `run_09.log`; the summary
-table prints to stdout.
+Each seed writes a full event log to `target/sim-logs/run_00.log` …
+`target/sim-logs/run_09.log`; the summary table prints to stdout.
 
 ---
 
@@ -222,8 +222,8 @@ have elapsed.
 - **Blood waits**: how many patients had to suspend on `blood_bank.get`.
 - **Nurse / Bed / Blood wait (mean)**: average time each patient spent suspended waiting for that resource.
 
-Per-run logs (`run_00.log` … `run_09.log`) contain the full timestamped event
-trace for debugging or post-hoc analysis.
+Per-run logs (`target/sim-logs/run_00.log` … `target/sim-logs/run_09.log`)
+contain the full timestamped event trace for debugging or post-hoc analysis.
 
 ---
 

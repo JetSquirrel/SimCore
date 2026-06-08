@@ -44,7 +44,8 @@ Add `simu` to your `Cargo.toml`:
 simu = { path = "." }
 ```
 
-Enable parallel Monte Carlo support with the optional feature flag:
+`monte_carlo::run` works out of the box (one `std::thread` per seed). For large seed counts, enable
+the optional feature to run on rayon's bounded thread pool instead:
 
 ```toml
 [dependencies]
@@ -107,7 +108,7 @@ cargo run --example hospital --release
 
 A hospital emergency department: priority-scheduled triage nurse, three beds with eviction of the
 longest-admitted patient when a critical case arrives, and a blood bank modelled as a `Container`.
-Logs to `run_<N>.log`.
+Logs to `target/sim-logs/run_<N>.log`.
 
 ```bash
 cargo run --example brewery --release
@@ -116,7 +117,7 @@ cargo run --example brewery --release
 A craft brewery / bio-reactor production line from the food & beverage domain: mash → boil →
 ferment → condition → bottle → CIP. The QA inspector contaminates the longest-running fermentation
 with a per-batch `EventTrigger`; contaminated batches preempt routine cleanups via a
-`PriorityResource`. Logs to `brewery_run_<N>.log`.
+`PriorityResource`. Logs to `target/sim-logs/brewery_run_<N>.log`.
 
 ## License
 

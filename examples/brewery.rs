@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::future::Future;
 use std::io::Write;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 
@@ -357,6 +358,20 @@ async fn arrivals(env: EnvHandle, ctx: BreweryCtx) {
 // Single-run entry point
 // ---------------------------------------------------------------------------
 
+/// Directory for per-run logs: `<target>/sim-logs`, created if missing.
+///
+/// Writing under the build target directory keeps these artifacts out of the
+/// source tree (and out of git — `/target` is gitignored). Honours
+/// `CARGO_TARGET_DIR` when set, falling back to `target/` next to the crate.
+fn log_dir() -> PathBuf {
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let dir = target.join("sim-logs");
+    std::fs::create_dir_all(&dir).expect("could not create log directory");
+    dir
+}
+
 fn run_simulation(seed: u64) -> SimResult {
     let mut env = SimEnv::with_seed(seed);
     let h = env.handle();
@@ -383,7 +398,7 @@ fn run_simulation(seed: u64) -> SimResult {
     env.spawn(arrivals(h, ctx.clone()));
     env.run();
 
-    let path = format!("brewery_run_{:02}.log", seed);
+    let path = log_dir().join(format!("brewery_run_{:02}.log", seed));
     let mut file = File::create(&path).expect("could not create log file");
     for line in ctx.log.borrow().iter() {
         writeln!(file, "{}", line).unwrap();
@@ -450,5 +465,8 @@ fn main() {
         mean(|r| r.line_cleared_at),
     );
 
-    println!("\nPer-run logs written to brewery_run_00.log … brewery_run_09.log");
+    println!(
+        "\nPer-run logs written to {}/brewery_run_00.log … brewery_run_09.log",
+        log_dir().display(),
+    );
 }

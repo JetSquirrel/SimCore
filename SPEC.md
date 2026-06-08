@@ -376,9 +376,12 @@ let results = monte_carlo::run(0..10, |seed| {
 // results[i] corresponds to seed i
 ```
 
-`monte_carlo::run` wraps the closure in an `Arc`, spawns one `std::thread` per seed, and collects
-results in seed order. Because `SimEnv` is created *inside* each closure, it never crosses thread
-boundaries and its `!Send` nature is not a problem.
+`monte_carlo::run` collects results in seed order. By default it wraps the closure in an `Arc` and
+spawns one `std::thread` per seed; enabling the `monte-carlo` feature switches the backend to rayon's
+bounded work-stealing pool (preferable for hundreds/thousands of seeds, where one OS thread per seed
+is wasteful). The public contract — seed-ordered results and panic propagation — is identical either
+way. Because `SimEnv` is created *inside* each closure, it never crosses thread boundaries and its
+`!Send` nature is not a problem.
 
 If any worker thread panics, the original panic payload is re-raised on the
 calling thread via `std::panic::resume_unwind` (after all siblings have been
@@ -431,10 +434,19 @@ entries, preserving two invariants:
 ### `trigger_cascade` for `Container`
 
 After any level change (successful `put` or `get`), `trigger_cascade` loops
-over `wake_get_waiters` and `wake_put_waiters` until the level stabilises.
-One iteration is sufficient for typical workloads; the loop handles chains
-where a put immediately enables a get, which immediately enables another
-put, and so on, all within a single call.
+over `wake_get_waiters` and `wake_put_waiters` until neither queue services a
+waiter in a pass. Termination is driven by whether any waiter was actually
+serviced — *not* by observing whether the level changed — so a pass whose gets
+and puts net to a zero level change still triggers another iteration when it
+leaves a newly-serviceable waiter behind. Each serviced waiter removes an entry
+from a finite queue, so the loop always terminates. One iteration is sufficient
+for typical workloads; the loop handles chains where a put immediately enables a
+get, which immediately enables another put, and so on, all within a single call.
+
+Both immediate-completion paths (`get` and `put`) run the *full* cascade. An
+earlier asymmetry — where the immediate `put` path woke only get-waiters — could
+strand a put-waiter that a freshly-woken get had just made serviceable; see
+`reviews/2026-06-08-architecture-review.md` (Findings 1 & 2).
 
 ### `RngGuard` and the no-await invariant
 
@@ -491,9 +503,9 @@ Listed in priority order:
 ## 7. Examples
 
 Two end-to-end examples ship in `examples/`. Each runs 10 parallel Monte Carlo simulations via
-`monte_carlo::run`, writes a per-run log file, and prints a summary table to stdout. The full
-walkthroughs (configuration, sequence diagrams, sample output) live in `examples/hospital.md` and
-`examples/brewery.md`.
+`monte_carlo::run`, writes a per-run log file under `target/sim-logs/`, and prints a summary table
+to stdout. The full walkthroughs (configuration, sequence diagrams, sample output) live in
+`examples/hospital.md` and `examples/brewery.md`.
 
 ### 7.1 Hospital Simulation
 
@@ -523,8 +535,8 @@ The bundled example (`examples/hospital.rs`) models:
 9. Releases all resources; patient discharged.
 
 The example runs 10 parallel Monte Carlo simulations via `monte_carlo::run`. Each run writes output to
-a dedicated `hospital_run_<N>.log` file. After all runs complete, a summary table of mean wait times
-and patient throughput is printed to stdout.
+a dedicated `target/sim-logs/run_<N>.log` file. After all runs complete, a summary table of mean wait
+times and patient throughput is printed to stdout.
 
 ### 7.2 Brewery Simulation
 
@@ -569,9 +581,9 @@ whether contamination won.
 and, after the order book closes, awaits `AllOf` on the whole vector so the harness can record
 the simulated time the line is fully drained.
 
-Per-run logs are written to `brewery_run_<N>.log`. The summary table reports arrivals per class,
-contaminated batches, total litres bottled, and mean wait times for the fermenter, bottling line,
-and yeast pool.
+Per-run logs are written to `target/sim-logs/brewery_run_<N>.log`. The summary table reports arrivals
+per class, contaminated batches, total litres bottled, and mean wait times for the fermenter, bottling
+line, and yeast pool.
 
 ---
 

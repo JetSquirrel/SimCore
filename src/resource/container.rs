@@ -6,9 +6,9 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 struct GetWaiter {
-    amount:   f64,
-    waker:    Waker,
-    done:     Rc<Cell<bool>>,
+    amount: f64,
+    waker: Waker,
+    done: Rc<Cell<bool>>,
     /// Shared with the owning `ContainerGetRequest`. Set to `true` if the
     /// future is dropped before being granted; the cascade skips canceled
     /// entries so the level is not deducted for an abandoned request.
@@ -16,15 +16,15 @@ struct GetWaiter {
 }
 
 struct PutWaiter {
-    amount:   f64,
-    waker:    Waker,
-    done:     Rc<Cell<bool>>,
+    amount: f64,
+    waker: Waker,
+    done: Rc<Cell<bool>>,
     canceled: Rc<Cell<bool>>,
 }
 
 struct ContainerState {
-    capacity:    f64,
-    level:       f64,
+    capacity: f64,
+    level: f64,
     get_waiters: VecDeque<GetWaiter>,
     put_waiters: VecDeque<PutWaiter>,
 }
@@ -35,7 +35,11 @@ struct ContainerState {
 
 /// Drain as many head-of-queue get waiters as current level allows (FIFO).
 /// Canceled entries (from abandoned requests) are skipped without touching level.
-fn wake_get_waiters(state: &mut ContainerState) {
+///
+/// Returns `true` if at least one live waiter was serviced — i.e. the level
+/// changed and the *other* queue may now have become unblocked.
+fn wake_get_waiters(state: &mut ContainerState) -> bool {
+    let mut serviced = false;
     while let Some(front) = state.get_waiters.front() {
         if front.canceled.get() {
             state.get_waiters.pop_front();
@@ -46,15 +50,20 @@ fn wake_get_waiters(state: &mut ContainerState) {
             state.level -= w.amount;
             w.done.set(true);
             w.waker.wake();
+            serviced = true;
         } else {
             break; // FIFO: head is blocked, nobody behind it can proceed
         }
     }
+    serviced
 }
 
 /// Drain as many head-of-queue put waiters as available space allows (FIFO).
 /// Canceled entries are skipped without touching level.
-fn wake_put_waiters(state: &mut ContainerState) {
+///
+/// Returns `true` if at least one live waiter was serviced.
+fn wake_put_waiters(state: &mut ContainerState) -> bool {
+    let mut serviced = false;
     while let Some(front) = state.put_waiters.front() {
         if front.canceled.get() {
             state.put_waiters.pop_front();
@@ -65,22 +74,28 @@ fn wake_put_waiters(state: &mut ContainerState) {
             state.level += w.amount;
             w.done.set(true);
             w.waker.wake();
+            serviced = true;
         } else {
             break;
         }
     }
+    serviced
 }
 
 /// Run get/put cascades until no more progress is possible.
 ///
-/// One iteration is enough for typical workloads; the loop handles chains
-/// where satisfying a put immediately enables a get (or vice-versa).
+/// Loops while either queue services a waiter, since satisfying a get frees
+/// space (possibly unblocking a put) and satisfying a put adds material
+/// (possibly unblocking a get). Termination is driven by whether any waiter
+/// was actually serviced — never by a float-level comparison — so a pass whose
+/// gets and puts net to a zero level change still triggers another iteration
+/// when it leaves a newly-serviceable waiter behind. Each serviced waiter
+/// removes an entry from a finite queue, so the loop always terminates.
 fn trigger_cascade(state: &mut ContainerState) {
     loop {
-        let before = state.level;
-        wake_get_waiters(state);
-        wake_put_waiters(state);
-        if (state.level - before).abs() < f64::EPSILON {
+        let serviced_get = wake_get_waiters(state);
+        let serviced_put = wake_put_waiters(state);
+        if !serviced_get && !serviced_put {
             break;
         }
     }
@@ -123,7 +138,10 @@ impl Container {
     /// `initial_level > capacity`.
     pub fn new(capacity: f64, initial_level: f64) -> Self {
         assert!(capacity > 0.0, "Container capacity must be positive");
-        assert!(initial_level >= 0.0, "Container initial_level must be non-negative");
+        assert!(
+            initial_level >= 0.0,
+            "Container initial_level must be non-negative"
+        );
         assert!(
             initial_level <= capacity,
             "Container initial_level must not exceed capacity"
@@ -158,11 +176,11 @@ impl Container {
     pub fn put(&self, amount: f64) -> ContainerPutRequest {
         assert!(amount > 0.0, "Container::put amount must be positive");
         ContainerPutRequest {
-            state:      Rc::clone(&self.state),
+            state: Rc::clone(&self.state),
             amount,
             registered: false,
-            done:       Rc::new(Cell::new(false)),
-            canceled:   Rc::new(Cell::new(false)),
+            done: Rc::new(Cell::new(false)),
+            canceled: Rc::new(Cell::new(false)),
         }
     }
 
@@ -176,11 +194,11 @@ impl Container {
     pub fn get(&self, amount: f64) -> ContainerGetRequest {
         assert!(amount > 0.0, "Container::get amount must be positive");
         ContainerGetRequest {
-            state:      Rc::clone(&self.state),
+            state: Rc::clone(&self.state),
             amount,
             registered: false,
-            done:       Rc::new(Cell::new(false)),
-            canceled:   Rc::new(Cell::new(false)),
+            done: Rc::new(Cell::new(false)),
+            canceled: Rc::new(Cell::new(false)),
         }
     }
 }
@@ -191,17 +209,17 @@ impl Container {
 
 /// Future returned by [`Container::put`].
 pub struct ContainerPutRequest {
-    state:      Rc<RefCell<ContainerState>>,
-    amount:     f64,
+    state: Rc<RefCell<ContainerState>>,
+    amount: f64,
     registered: bool,
     /// Shared with the `PutWaiter` entry; the cascade sets this to `true`
     /// before calling `waker.wake()`, so the next poll can return `Ready`
     /// without re-checking the level.
-    done:       Rc<Cell<bool>>,
+    done: Rc<Cell<bool>>,
     /// Shared with the `PutWaiter` entry; the request's `Drop` impl sets this
     /// to `true` if the future is abandoned before being granted, so the
     /// cascade skips the entry without adding level.
-    canceled:   Rc<Cell<bool>>,
+    canceled: Rc<Cell<bool>>,
 }
 
 impl Future for ContainerPutRequest {
@@ -216,14 +234,17 @@ impl Future for ContainerPutRequest {
             let mut state = self.state.borrow_mut();
             if !self.registered && state.level + self.amount <= state.capacity {
                 state.level += self.amount;
-                wake_get_waiters(&mut state);
+                // Full cascade, not just wake_get_waiters: a woken get may drain
+                // the level and free space for a blocked put-waiter behind it.
+                // Using only wake_get_waiters here would strand that put-waiter.
+                trigger_cascade(&mut state);
                 return Poll::Ready(());
             }
             if !self.registered {
                 state.put_waiters.push_back(PutWaiter {
-                    amount:   self.amount,
-                    waker:    cx.waker().clone(),
-                    done:     Rc::clone(&self.done),
+                    amount: self.amount,
+                    waker: cx.waker().clone(),
+                    done: Rc::clone(&self.done),
                     canceled: Rc::clone(&self.canceled),
                 });
             }
@@ -249,16 +270,16 @@ impl Drop for ContainerPutRequest {
 
 /// Future returned by [`Container::get`].
 pub struct ContainerGetRequest {
-    state:      Rc<RefCell<ContainerState>>,
-    amount:     f64,
+    state: Rc<RefCell<ContainerState>>,
+    amount: f64,
     registered: bool,
     /// Shared with the `GetWaiter` entry; the cascade sets this to `true`
     /// before calling `waker.wake()`, so the next poll can return `Ready`.
-    done:       Rc<Cell<bool>>,
+    done: Rc<Cell<bool>>,
     /// Shared with the `GetWaiter` entry; the request's `Drop` impl sets this
     /// to `true` if the future is abandoned before being granted, so the
     /// cascade skips the entry without deducting level.
-    canceled:   Rc<Cell<bool>>,
+    canceled: Rc<Cell<bool>>,
 }
 
 impl Future for ContainerGetRequest {
@@ -280,9 +301,9 @@ impl Future for ContainerGetRequest {
             }
             if !self.registered {
                 state.get_waiters.push_back(GetWaiter {
-                    amount:   self.amount,
-                    waker:    cx.waker().clone(),
-                    done:     Rc::clone(&self.done),
+                    amount: self.amount,
+                    waker: cx.waker().clone(),
+                    done: Rc::clone(&self.done),
                     canceled: Rc::clone(&self.canceled),
                 });
             }
