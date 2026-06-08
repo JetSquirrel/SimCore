@@ -579,10 +579,10 @@ Listed in priority order:
 
 ## 7. Examples
 
-Two end-to-end examples ship in `examples/`. Each runs 10 parallel Monte Carlo simulations via
+Three end-to-end examples ship in `examples/`. Each runs 10 parallel Monte Carlo simulations via
 `monte_carlo::run`, writes a per-run log file under `target/sim-logs/`, and prints a summary table
 to stdout. The full walkthroughs (configuration, sequence diagrams, sample output) live in
-`examples/hospital.md` and `examples/brewery.md`.
+`examples/hospital.md`, `examples/brewery.md`, and `examples/warehouse.md`.
 
 ### 7.1 Hospital Simulation
 
@@ -661,6 +661,56 @@ the simulated time the line is fully drained.
 Per-run logs are written to `target/sim-logs/brewery_run_<N>.log`. The summary table reports arrivals
 per class, contaminated batches, total litres bottled, and mean wait times for the fermenter, bottling
 line, and yeast pool.
+
+### 7.3 Warehouse Simulation
+
+The third bundled example (`examples/warehouse.rs`) covers the **logistics / material-handling**
+domain: a distribution center whose small forklift fleet is the shared bottleneck between receiving
+and shipping. It is the first example to exercise `PreemptiveResource`.
+
+| Entity            | Count | Type                   | Role                                                |
+|-------------------|------:|------------------------|-----------------------------------------------------|
+| Dock doors        |     4 | `Resource`             | Shared by inbound unload and outbound load; FIFO    |
+| Forklifts         |     2 | `PreemptiveResource`   | Unload / load (priority 0) preempt putaway (priority 1) |
+| Pickers           |     4 | `PriorityResource`     | Expedite orders (priority 0) jump ahead of standard (priority 1) |
+| Packing stations  |     2 | `Resource`             | Pack picked orders                                  |
+| Inventory         |   one | `Container`            | On-hand stock in cases; inbound `put`s, outbound `get`s |
+
+**Inbound truck flow:**
+
+1. Truck arrives (Poisson inter-arrival).
+2. Acquires a **dock door** and a **forklift** at priority 0, unloads (~ 30 min), releases both.
+3. Receiving check / QC (~ 10 min, a plain timeout — no resource).
+4. **Putaway** at priority 1: races `any_of![timeout(~20 min), forklift.preempted()]`. If a
+   truck-side job preempts the forklift, records the elapsed progress, parks the pallet, and loops
+   to reacquire a forklift and finish the *remaining* time.
+5. Once putaway completes uninterrupted, `inventory.put(+180)` — stock becomes available only now.
+
+**Outbound order flow:**
+
+1. Order arrives (Poisson inter-arrival; 20% expedite).
+2. Acquires a **picker** at priority 0 (expedite) or 1 (standard), picks (~ Exp(8 min)).
+3. `inventory.get(cases)` *inside* the picker hold — a stockout suspends the picker until an inbound
+   putaway replenishes stock, coupling the two streams. Releases the picker.
+4. Acquires a **packing station**, packs (~ 5 min), releases.
+5. Acquires a **dock door** and a **forklift** at priority 0 (urgent — preempts putaway), loads
+   (~ 6 min), ships.
+
+**Preemption mechanism.** The forklift fleet is a `PreemptiveResource`. When all units are busy and
+a truck-side request (priority 0) arrives, it evicts the lowest-priority holder — a routine putaway
+(priority 1) — firing that holder's `preempted()` signal. The putaway observes this at its next
+yield via `any_of!`, banks its elapsed progress (`remaining -= now - start`), and re-queues to
+finish later. Keeping all three forklift tasks at just two priority levels guarantees putaway is the
+only preemptible task.
+
+**`AllOf` join.** Each arrival stream (`truck_arrivals`, `order_arrivals`) collects its spawned
+`ProcessHandle<()>::discard()` futures and, after its cutoff at `SIM_DURATION`, awaits `AllOf` over
+the vector (guarded by a hard-deadline `any_of!` safety net). `day_cleared_at` is the later of the
+two streams' completion times.
+
+Per-run logs are written to `target/sim-logs/warehouse_run_<N>.log`. The summary table reports
+trucks and orders accepted, completed orders per class, putaway preemptions, stockouts, and mean
+wait times for the dock doors, forklift fleet, and pickers.
 
 ---
 

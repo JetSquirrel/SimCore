@@ -25,6 +25,7 @@ cargo test                        # 87 passing tests across unit + integration s
 cargo test <test_name>            # run a single test
 cargo run --example hospital      # ER patient-flow simulation
 cargo run --example brewery       # brewery / process-automation simulation
+cargo run --example warehouse     # distribution-center forklift-preemption simulation
 cargo bench                       # Criterion benchmark suite (benches/simulation.rs)
 cargo clippy -- -D warnings       # must stay warning-clean
 ```
@@ -53,8 +54,9 @@ simu/
 │       ├── container.rs  # Container (continuous quantity, FIFO put/get)
 │       └── preemptive.rs # PreemptiveResource — priority pool with cooperative-at-yield preemption
 ├── examples/
-│   ├── hospital.rs / hospital.md
-│   └── brewery.rs  / brewery.md
+│   ├── hospital.rs  / hospital.md
+│   ├── brewery.rs   / brewery.md
+│   └── warehouse.rs / warehouse.md
 ├── benches/
 │   └── simulation.rs     # Criterion benchmarks
 └── tests/                # 10 integration files: timeout, event, resource, priority_resource,
@@ -159,11 +161,13 @@ panic-on-misuse only. No async runtime dependency — the executor is self-conta
 and clippy-clean: `SimEnv`/event queue, `Timeout`, manual `Event` (multi-waiter + fire-before-await
 latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `ProcessHandle<T>`,
 `AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG, deterministic tie-breaking,
-`monte_carlo::run`, both examples, integration tests, and Criterion benches.
+`monte_carlo::run`, the hospital and brewery examples, integration tests, and Criterion benches.
 
 **Delivered post-MVP:**
 
 - `PreemptiveResource` — priority pool with cooperative-at-yield preemption (`src/resource/preemptive.rs`).
+- `warehouse` example — distribution center whose forklift fleet (`PreemptiveResource`) is preempted
+  between receiving and shipping; the first example to exercise preemption (`examples/warehouse.rs`).
 
 **Post-MVP (not yet implemented)** — see `SPEC.md §6`:
 

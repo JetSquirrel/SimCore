@@ -102,10 +102,11 @@ cargo clippy -- -D warnings
 
 ## Examples
 
-Two end-to-end examples demonstrate every public primitive in different domains. Both run 10
+Three end-to-end examples demonstrate every public primitive in different domains. All run 10
 parallel Monte Carlo simulations, write per-run logs, and print a summary table to stdout.
-See [`examples/hospital.md`](examples/hospital.md) and [`examples/brewery.md`](examples/brewery.md)
-for full walkthroughs (sequence diagrams, configuration, sample output).
+See [`examples/hospital.md`](examples/hospital.md), [`examples/brewery.md`](examples/brewery.md),
+and [`examples/warehouse.md`](examples/warehouse.md) for full walkthroughs (sequence diagrams,
+configuration, sample output).
 
 ```bash
 cargo run --example hospital --release
@@ -123,6 +124,16 @@ A craft brewery / bio-reactor production line from the food & beverage domain: m
 ferment → condition → bottle → CIP. The QA inspector contaminates the longest-running fermentation
 with a per-batch `EventTrigger`; contaminated batches preempt routine cleanups via a
 `PriorityResource`. Logs to `target/sim-logs/brewery_run_<N>.log`.
+
+```bash
+cargo run --example warehouse --release
+```
+
+A distribution center from the logistics / material-handling domain: inbound trucks (unload → QC →
+putaway) and outbound orders (pick → pack → load) share one small forklift fleet. The fleet is a
+`PreemptiveResource` — urgent truck-side work evicts a routine putaway, whose driver parks the
+pallet and finishes it later. The first example to exercise `PreemptiveResource`. Logs to
+`target/sim-logs/warehouse_run_<N>.log`.
 
 ## License
 
