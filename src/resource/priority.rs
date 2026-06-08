@@ -1,63 +1,10 @@
 use std::cell::{Cell, RefCell};
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
-// ---------------------------------------------------------------------------
-// Internal waiter entry stored in the priority heap
-// ---------------------------------------------------------------------------
-
-struct PriorityWaiter {
-    priority: u32,
-    /// Monotonically increasing counter — guarantees FIFO ordering within the
-    /// same priority level.
-    seq: u64,
-    waker: Waker,
-    /// Shared with the owning `PriorityResourceRequest`. Set to `true` if the
-    /// request is dropped before being granted; the guard-release loop skips
-    /// canceled entries so live higher-priority waiters still get served.
-    canceled: Rc<Cell<bool>>,
-}
-
-// BinaryHeap is a max-heap. We want the *lowest* (priority, seq) pair at the
-// top, so we reverse the natural ordering.
-impl Ord for PriorityWaiter {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .priority
-            .cmp(&self.priority)
-            .then(other.seq.cmp(&self.seq))
-    }
-}
-
-impl PartialOrd for PriorityWaiter {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for PriorityWaiter {
-    fn eq(&self, other: &Self) -> bool {
-        self.priority == other.priority && self.seq == other.seq
-    }
-}
-
-impl Eq for PriorityWaiter {}
-
-// ---------------------------------------------------------------------------
-// Internal state
-// ---------------------------------------------------------------------------
-
-struct PriorityResourceState {
-    capacity: usize,
-    in_use: usize,
-    /// Monotonic counter for FIFO tie-breaking within the same priority level.
-    next_seq: u64,
-    waiters: BinaryHeap<PriorityWaiter>,
-}
+use super::wait_queue::WaitQueue;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -77,9 +24,13 @@ struct PriorityResourceState {
 /// `PriorityResource` wraps an `Rc<RefCell<>>` internally, so cloning is cheap
 /// and all clones share the same pool. It is `!Send + !Sync` — consistent with
 /// `SimEnv`.
+///
+/// Internally this is a [`WaitQueue<u32>`](super::wait_queue::WaitQueue): the
+/// `u32` priority is the ordering key, and the queue's internal sequence
+/// counter provides FIFO tie-breaking within a level.
 #[derive(Clone)]
 pub struct PriorityResource {
-    state: Rc<RefCell<PriorityResourceState>>,
+    state: Rc<RefCell<WaitQueue<u32>>>,
 }
 
 impl PriorityResource {
@@ -92,12 +43,7 @@ impl PriorityResource {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "PriorityResource capacity must be at least 1");
         PriorityResource {
-            state: Rc::new(RefCell::new(PriorityResourceState {
-                capacity,
-                in_use: 0,
-                next_seq: 0,
-                waiters: BinaryHeap::new(),
-            })),
+            state: Rc::new(RefCell::new(WaitQueue::new(capacity))),
         }
     }
 
@@ -113,7 +59,6 @@ impl PriorityResource {
         PriorityResourceRequest {
             state: Rc::clone(&self.state),
             priority,
-            seq: 0,
             registered: false,
             canceled: Rc::new(Cell::new(false)),
         }
@@ -122,13 +67,13 @@ impl PriorityResource {
     /// Number of units currently in use.
     #[must_use]
     pub fn in_use(&self) -> usize {
-        self.state.borrow().in_use
+        self.state.borrow().in_use()
     }
 
     /// Total capacity of this resource pool.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.state.borrow().capacity
+        self.state.borrow().capacity()
     }
 }
 
@@ -136,11 +81,8 @@ impl PriorityResource {
 ///
 /// Resolves to a [`PriorityResourceGuard`] once a unit is acquired.
 pub struct PriorityResourceRequest {
-    state: Rc<RefCell<PriorityResourceState>>,
+    state: Rc<RefCell<WaitQueue<u32>>>,
     priority: u32,
-    /// Sequence number assigned on first registration for FIFO tie-breaking.
-    /// Zero until the request is first enqueued.
-    seq: u64,
     /// Prevents double-queuing on repeated polls (same pattern as `ResourceRequest`).
     registered: bool,
     /// Shared with the queue entry; set to `true` on drop if the request was
@@ -152,38 +94,19 @@ impl Future for PriorityResourceRequest {
     type Output = PriorityResourceGuard;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<PriorityResourceGuard> {
-        // Compute whether we need to register, returning the assigned seq if so.
-        // The RefMut must be dropped before we write back to `self`.
-        let newly_registered_seq: Option<u64> = {
+        // Drop the borrow before writing self.registered to satisfy the borrow checker.
+        {
             let mut state = self.state.borrow_mut();
-
-            if state.in_use < state.capacity {
-                state.in_use += 1;
+            if state.try_acquire() {
                 return Poll::Ready(PriorityResourceGuard {
                     state: Rc::clone(&self.state),
                 });
             }
-
             if !self.registered {
-                let seq = state.next_seq;
-                state.next_seq += 1;
-                state.waiters.push(PriorityWaiter {
-                    priority: self.priority,
-                    seq,
-                    waker: cx.waker().clone(),
-                    canceled: Rc::clone(&self.canceled),
-                });
-                Some(seq)
-            } else {
-                None
+                state.register(self.priority, cx.waker().clone(), Rc::clone(&self.canceled));
             }
-        };
-
-        if let Some(seq) = newly_registered_seq {
-            self.seq = seq;
-            self.registered = true;
         }
-
+        self.registered = true;
         Poll::Pending
     }
 }
@@ -201,20 +124,13 @@ impl Drop for PriorityResourceRequest {
 /// The unit is released automatically when this value is dropped, waking the
 /// highest-priority suspended requester (if any).
 pub struct PriorityResourceGuard {
-    state: Rc<RefCell<PriorityResourceState>>,
+    state: Rc<RefCell<WaitQueue<u32>>>,
 }
 
 impl Drop for PriorityResourceGuard {
     fn drop(&mut self) {
-        let mut state = self.state.borrow_mut();
-        state.in_use -= 1;
-        // Skip canceled (abandoned) waiters so live higher-priority waiters
-        // behind them are still served.
-        while let Some(waiter) = state.waiters.pop() {
-            if !waiter.canceled.get() {
-                waiter.waker.wake();
-                return;
-            }
-        }
+        // Release one unit and wake the highest-priority live waiter; the
+        // WaitQueue skips canceled (abandoned) waiters automatically.
+        self.state.borrow_mut().release();
     }
 }

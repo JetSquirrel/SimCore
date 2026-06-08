@@ -111,14 +111,17 @@ change behind the existing Criterion suite.
   (time advances to the boundary) but subtle: a process scheduled exactly at `until` is not run, yet
   `now()` reports `until`. Worth a doc note. — OPEN.
 
-## 6. Maintainability / extensibility — **OPEN**
+## 6. Maintainability / extensibility — **PARTIALLY OPEN**
 
-- **Four request-futures (`Resource`, `PriorityResource`, `Container` get/put) duplicate the
-  `registered` / `canceled` / drop-cancel pattern nearly verbatim.** Adding `PreemptiveResource` /
-  `Store` will copy it again. Extracting a small internal `WaitQueue` helper (queue + cancel-skip +
-  FIFO seq + cascade) that each resource composes is the biggest *future* maintainability win — and
-  would have made Findings 1 & 2 structurally impossible (one cascade implementation, not two).
-  **Strongly recommended before adding post-MVP resource types.**
+- **Four request-futures (`Resource`, `PriorityResource`, `Container` get/put) duplicated the
+  `registered` / `canceled` / drop-cancel pattern nearly verbatim.** **FIXED (wake-and-retry half):**
+  extracted `resource::wait_queue::WaitQueue<K>` — a `pub(crate)` helper owning the capacity counters,
+  FIFO sequence counter, and ordered waiter heap (`try_acquire`/`register`/`release`). `Resource` is
+  now `WaitQueue<()>` (FIFO), `PriorityResource` is `WaitQueue<u32>` (priority); both shed their
+  bespoke state structs and release loops. `PreemptiveResource` will build on the same helper. Five
+  unit tests cover the helper directly (ordering, FIFO-within-key, cancel-skip). `Container`'s
+  two-sided amount-based cascade is intentionally left separate (commit-at-wake doesn't fit
+  wake-and-retry) — its de-dup remains OPEN but is lower value.
 - **Module privacy:** tests/benches import `simu::env::SimEnv` (module path) rather than the curated
   re-export `simu::SimEnv`. Consider `pub(crate)` on the modules and re-export only the public surface
   from `lib.rs`.
@@ -132,7 +135,8 @@ change behind the existing Criterion suite.
 3. **Reconcile panic-semantics docs** in SPEC §4.3 (Finding 5) — *done; truthfulness restored, behaviour deferred to §6.6.*
 4. **Add `#[must_use]`** to futures/accessors (Finding 3) — *done; 26 sites annotated.*
 5. *(When growing)* extract the shared `WaitQueue` helper (Finding 6) before adding
-   `PreemptiveResource` / `Store`.
+   `PreemptiveResource` / `Store`. — *done; `WaitQueue<K>` extracted for the wake-and-retry
+   resources, with direct unit coverage.*
 
 ## Changelog for this cycle
 

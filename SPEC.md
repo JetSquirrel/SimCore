@@ -413,6 +413,23 @@ The following patterns are shared across all suspendable primitives. They are
 implementation details but are documented because they are load-bearing for
 correctness.
 
+### Shared `WaitQueue` for wake-and-retry resources
+
+`Resource` and `PriorityResource` share a single internal helper,
+`resource::wait_queue::WaitQueue<K>` (`pub(crate)`), rather than each
+re-implementing waiter bookkeeping. It owns the `capacity`/`in_use` counters,
+a monotonic FIFO sequence counter, and an ordered `BinaryHeap` of parked
+waiters, exposing `try_acquire` / `register` / `release`. Waiters are served in
+ascending `(key, seq)` order, so:
+
+- `Resource` is `WaitQueue<()>` — every key is equal, giving pure FIFO.
+- `PriorityResource` is `WaitQueue<u32>` — lower key first, FIFO within a level.
+
+This keeps the `registered` / `canceled` / release-skip logic in one place (and
+gives the post-MVP `PreemptiveResource` a ready-made base). `Container` keeps its
+own two-sided amount-based cascade — its commit-at-wake model does not fit the
+wake-and-retry shape — see `trigger_cascade` below.
+
 ### `registered` flag
 
 Every request-future (`ResourceRequest`, `PriorityResourceRequest`,
@@ -427,9 +444,9 @@ earlier waiter and thereby violate FIFO ordering.
 
 If a registered request-future is dropped before being granted (for example,
 a competing arm of `any_of!` resolves first), its `Drop` impl sets a shared
-`Rc<Cell<bool>>` canceled flag on the queue entry. Guard-release loops
-(`Resource`, `PriorityResource`) and the Container wake-cascade skip canceled
-entries, preserving two invariants:
+`Rc<Cell<bool>>` canceled flag on the queue entry. The shared `WaitQueue`
+release path (`Resource`, `PriorityResource`) and the Container wake-cascade
+skip canceled entries, preserving two invariants:
 
 - **No waiter starvation**: a live waiter behind a dropped one is still woken.
 - **No material leak in `Container`**: the cascade never deducts level for an
@@ -463,7 +480,7 @@ misuse. This makes deterministic sampling safe by construction.
 
 ## 5. MVP Feature Set
 
-**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (71 passing tests),
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (76 passing tests),
 clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
@@ -486,7 +503,7 @@ clippy-clean (`-D warnings`), and benchmarked.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Integration test suite (71 tests)  | Done ✅     |
+| Test suite (76 unit + integration)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---

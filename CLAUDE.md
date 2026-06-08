@@ -21,7 +21,7 @@ When changing behaviour, keep `SPEC.md` and `API.md` in sync.
 
 ```bash
 cargo build
-cargo test                        # 69 passing tests across unit + integration suites
+cargo test                        # 76 passing tests across unit + integration suites
 cargo test <test_name>            # run a single test
 cargo run --example hospital      # ER patient-flow simulation
 cargo run --example brewery       # brewery / process-automation simulation
@@ -48,6 +48,7 @@ simu/
 │   ├── monte_carlo.rs    # monte_carlo::run — std::thread (default) or rayon (monte-carlo feature)
 │   └── resource/
 │       ├── mod.rs        # Resource, ResourceRequest, ResourceGuard (FIFO)
+│       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared wake-and-retry waiter bookkeeping
 │       ├── priority.rs   # PriorityResource (priority heap, FIFO within a level)
 │       ├── container.rs  # Container (continuous quantity, FIFO put/get)
 │       └── preemptive.rs # PreemptiveResource — STUB only (post-MVP, not implemented)
@@ -110,6 +111,11 @@ simulation must produce identical results.
 `Mutex` is needed because the executor is single-threaded. These types are `!Send + !Sync`, consistent
 with `SimEnv`.
 
+`Resource` and `PriorityResource` share one internal `pub(crate)` helper,
+`resource::wait_queue::WaitQueue<K>` (`WaitQueue<()>` = FIFO, `WaitQueue<u32>` = priority), which owns
+the capacity counters and the ordered waiter heap (`try_acquire`/`register`/`release`). `Container`
+keeps its own two-sided amount-based cascade (its commit-at-wake model doesn't fit wake-and-retry).
+
 ```rust
 let machine = Resource::new(1);
 let m = machine.clone();           // cheap Rc clone, same pool
@@ -148,7 +154,7 @@ panic-on-misuse only. No async runtime dependency — the executor is self-conta
 
 ## Status
 
-**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (71 passing tests),
+**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (76 passing tests),
 and clippy-clean: `SimEnv`/event queue, `Timeout`, manual `Event` (multi-waiter + fire-before-await
 latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `ProcessHandle<T>`,
 `AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG, deterministic tie-breaking,

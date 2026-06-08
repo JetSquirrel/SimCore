@@ -1,9 +1,8 @@
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 
 pub mod container;
 pub use container::{Container, ContainerGetRequest, ContainerPutRequest};
@@ -12,20 +11,8 @@ mod preemptive;
 pub mod priority;
 pub use priority::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
 
-struct ResourceWaiter {
-    waker: Waker,
-    /// Shared with the owning `ResourceRequest`. Set to `true` by the request's
-    /// `Drop` impl when the future is abandoned before being granted; the guard
-    /// release loop skips canceled entries so live waiters behind them are
-    /// still woken.
-    canceled: Rc<Cell<bool>>,
-}
-
-struct ResourceState {
-    capacity: usize,
-    in_use: usize,
-    waiters: VecDeque<ResourceWaiter>,
-}
+pub(crate) mod wait_queue;
+use wait_queue::WaitQueue;
 
 /// A cloneable handle to a capacity-limited resource pool.
 ///
@@ -36,9 +23,12 @@ struct ResourceState {
 /// `Resource` wraps an `Rc<RefCell<>>` internally, so cloning is cheap and
 /// all clones share the same pool. It is `!Send + !Sync` — consistent with
 /// `SimEnv`.
+///
+/// FIFO ordering is the degenerate `WaitQueue<()>` case: every waiter shares
+/// the same (unit) key, so they are served purely in insertion order.
 #[derive(Clone)]
 pub struct Resource {
-    state: Rc<RefCell<ResourceState>>,
+    state: Rc<RefCell<WaitQueue<()>>>,
 }
 
 impl Resource {
@@ -50,11 +40,7 @@ impl Resource {
     pub fn new(capacity: usize) -> Self {
         assert!(capacity > 0, "Resource capacity must be at least 1");
         Resource {
-            state: Rc::new(RefCell::new(ResourceState {
-                capacity,
-                in_use: 0,
-                waiters: VecDeque::new(),
-            })),
+            state: Rc::new(RefCell::new(WaitQueue::new(capacity))),
         }
     }
 
@@ -74,13 +60,13 @@ impl Resource {
     /// Number of units currently in use.
     #[must_use]
     pub fn in_use(&self) -> usize {
-        self.state.borrow().in_use
+        self.state.borrow().in_use()
     }
 
     /// Total capacity of this resource pool.
     #[must_use]
     pub fn capacity(&self) -> usize {
-        self.state.borrow().capacity
+        self.state.borrow().capacity()
     }
 }
 
@@ -88,12 +74,12 @@ impl Resource {
 ///
 /// Resolves to a [`ResourceGuard`] once a unit is acquired.
 pub struct ResourceRequest {
-    state: Rc<RefCell<ResourceState>>,
-    /// Whether this request has already been enqueued in `waiters`.
+    state: Rc<RefCell<WaitQueue<()>>>,
+    /// Whether this request has already been enqueued in the wait queue.
     /// Prevents double-queuing on repeated polls.
     registered: bool,
     /// Shared with the queue entry; set to `true` on drop if the request was
-    /// registered but never granted, so the guard-release loop skips it.
+    /// registered but never granted, so the release loop skips it.
     canceled: Rc<Cell<bool>>,
 }
 
@@ -101,20 +87,16 @@ impl Future for ResourceRequest {
     type Output = ResourceGuard;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<ResourceGuard> {
-        // Drop the RefMut before writing self.registered to satisfy the borrow checker.
+        // Drop the borrow before writing self.registered to satisfy the borrow checker.
         {
             let mut state = self.state.borrow_mut();
-            if state.in_use < state.capacity {
-                state.in_use += 1;
+            if state.try_acquire() {
                 return Poll::Ready(ResourceGuard {
                     state: Rc::clone(&self.state),
                 });
             }
             if !self.registered {
-                state.waiters.push_back(ResourceWaiter {
-                    waker: cx.waker().clone(),
-                    canceled: Rc::clone(&self.canceled),
-                });
+                state.register((), cx.waker().clone(), Rc::clone(&self.canceled));
             }
         }
         self.registered = true;
@@ -135,22 +117,13 @@ impl Drop for ResourceRequest {
 /// The unit is released automatically when this value is dropped, waking the
 /// next suspended requester (if any) in FIFO order.
 pub struct ResourceGuard {
-    state: Rc<RefCell<ResourceState>>,
+    state: Rc<RefCell<WaitQueue<()>>>,
 }
 
 impl Drop for ResourceGuard {
     fn drop(&mut self) {
-        let mut state = self.state.borrow_mut();
-        state.in_use -= 1;
-        // Pop entries until we find a live (non-canceled) waiter.
-        // Canceled entries are abandoned requests whose futures were dropped;
-        // waking their dead wakers is harmless but would leave subsequent
-        // live waiters stranded, so skip them instead.
-        while let Some(w) = state.waiters.pop_front() {
-            if !w.canceled.get() {
-                w.waker.wake();
-                return;
-            }
-        }
+        // Release one unit and wake the next live (non-canceled) waiter; the
+        // WaitQueue skips abandoned entries so live waiters are not stranded.
+        self.state.borrow_mut().release();
     }
 }
