@@ -42,7 +42,7 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (79 integration tests + 8 inline unit tests).
+Current coverage: **~98% lines** across all library source files (80 integration tests + 8 inline unit tests).
 (The per-file percentages below were last measured before the `WaitQueue`/`PreemptiveResource`
 additions; re-run `cargo llvm-cov` to refresh.)
 
