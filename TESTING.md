@@ -166,7 +166,7 @@ and capacity accounting under eviction.
 | `all_of_empty_resolves_immediately` | `AllOf::new(vec![])` | Resolves at t=0 without suspending |
 | `all_of_mixed_timeout_and_event` | `all_of![timeout(5.0), signal]`; signal fires at t=8 | Resolves at t=8 |
 
-### tests/container.rs — 12 tests
+### tests/container.rs — 15 tests
 
 | Test | What it verifies |
 |---|---|
@@ -176,8 +176,11 @@ and capacity accounting under eviction.
 | `put_blocks_then_wakes_on_get` | `put` suspends when full; wakes when a `get` frees space |
 | `fifo_ordering_for_get_waiters` | Three blocked `get`s served in spawn order as `put`s trickle in |
 | `fifo_ordering_for_put_waiters` | Three blocked `put`s (full container) served in spawn order |
+| `fresh_small_get_queues_behind_blocked_large_get` | Strict head-of-line FIFO: a fresh fitting `get` does **not** bypass an already-blocked larger `get` (matches SimPy) |
+| `fresh_small_put_queues_behind_blocked_large_put` | Strict head-of-line FIFO: a fresh fitting `put` does **not** bypass an already-blocked larger `put` |
 | `cascade_satisfies_multiple_gets` | One large `put` wakes multiple pending `get`s in one cascade pass |
 | `cascade_chain_get_put_get_put` | `trigger_cascade` loop resolves a 5-step get→put→get→put→get chain in one pass |
+| `immediate_get_cascade_wakes_multiple_blocked_puts` | An immediate `get` frees space and wakes multiple blocked `put`s in one cascade pass (put-side mirror) |
 | `level_and_capacity_accessors` | `level()`/`capacity()` return correct values before/after operations |
 | `zero_capacity_panics` | `Container::new(0.0, 0.0)` panics |
 | `negative_capacity_panics` | `Container::new(-1.0, 0.0)` panics |
@@ -265,6 +268,16 @@ N values are the parameterized workload sizes passed to `BenchmarkId`.
 | `event_broadcast` | `EventAwaitable` waker registration and `waiters.drain(..)` dispatch when all N wake simultaneously | 100 / 1 000 / 10 000 |
 | `mixed_workload` | End-to-end throughput combining spawn, timeouts, and two resources (nurse cap=1, beds cap=3) | 100 / 1 000 / 10 000 |
 | `monte_carlo_scaling` | Parallelism efficiency: K independent copies of `mixed_workload(100)` via `monte_carlo::run` | 1 / 2 / 4 / 8 threads |
+
+## Cross-engine parity (SimPy)
+
+Beyond the `cargo test` suite, the `compare/` harness validates `simu` against
+Python's [SimPy](https://simpy.readthedocs.io/) as a reference oracle — comparing
+output-metric distributions across many seeds (and queue models against closed-form
+queueing theory) plus relative performance. It is what surfaced the `Container`
+strict-FIFO divergence (since fixed). Run it with `compare/run_comparison.sh`; see
+[`compare/README.md`](compare/README.md) for methodology and
+[`compare/REPORT.md`](compare/REPORT.md) for the latest results.
 
 ## Key implementation notes
 

@@ -30,6 +30,28 @@ struct ContainerState {
 }
 
 // ---------------------------------------------------------------------------
+// FIFO guards
+// ---------------------------------------------------------------------------
+
+/// True if at least one non-canceled `get` waiter is already queued.
+///
+/// A freshly-arriving `get` must not take level ahead of such a waiter, even
+/// when the current level would cover it — that would violate the documented
+/// head-of-line FIFO contract (and diverge from SimPy). Canceled entries (from
+/// abandoned requests) don't count: they are skipped by the cascade and hold no
+/// claim on the level.
+fn has_live_get_waiter(state: &ContainerState) -> bool {
+    state.get_waiters.iter().any(|w| !w.canceled.get())
+}
+
+/// True if at least one non-canceled `put` waiter is already queued. Symmetric
+/// to [`has_live_get_waiter`]: a fresh `put` must not take space ahead of an
+/// earlier blocked put.
+fn has_live_put_waiter(state: &ContainerState) -> bool {
+    state.put_waiters.iter().any(|w| !w.canceled.get())
+}
+
+// ---------------------------------------------------------------------------
 // Wake cascade helpers
 // ---------------------------------------------------------------------------
 
@@ -114,9 +136,12 @@ fn trigger_cascade(state: &mut ContainerState) {
 /// - `get` suspends when the current level is below the requested amount.
 /// - `put` suspends when adding the amount would exceed the container's capacity.
 ///
-/// Waiters are served **FIFO** within each queue. All clones share the same
-/// internal state (cheap `Rc` clone). `Container` is `!Send + !Sync`,
-/// consistent with `SimEnv`.
+/// Waiters are served in **strict head-of-line FIFO** within each queue: a
+/// freshly-arriving request never takes level/space ahead of an already-queued
+/// waiter, even when the current level would let it complete immediately. A
+/// blocked head-of-queue request therefore holds the line for everyone behind
+/// it (matching SimPy's `Container`). All clones share the same internal state
+/// (cheap `Rc` clone). `Container` is `!Send + !Sync`, consistent with `SimEnv`.
 #[derive(Clone)]
 pub struct Container {
     state: Rc<RefCell<ContainerState>>,
@@ -238,7 +263,13 @@ impl Future for ContainerPutRequest {
         }
         {
             let mut state = self.state.borrow_mut();
-            if !self.registered && state.level + self.amount <= state.capacity {
+            // Fast path only when nothing is queued ahead of us: taking space
+            // out-of-turn would let a fresh put jump an earlier blocked put,
+            // violating FIFO.
+            if !self.registered
+                && state.level + self.amount <= state.capacity
+                && !has_live_put_waiter(&state)
+            {
                 state.level += self.amount;
                 // Full cascade, not just wake_get_waiters: a woken get may drain
                 // the level and free space for a blocked put-waiter behind it.
@@ -299,8 +330,10 @@ impl Future for ContainerGetRequest {
         {
             let mut state = self.state.borrow_mut();
             // Only take level immediately if we haven't yet registered as a
-            // waiter — taking level out-of-turn would violate FIFO ordering.
-            if !self.registered && state.level >= self.amount {
+            // waiter *and* no live waiter is queued ahead of us — taking level
+            // out-of-turn would let a fresh (e.g. smaller) get jump an earlier
+            // blocked get, violating FIFO.
+            if !self.registered && state.level >= self.amount && !has_live_get_waiter(&state) {
                 state.level -= self.amount;
                 trigger_cascade(&mut state);
                 return Poll::Ready(());

@@ -353,8 +353,12 @@ impl Container {
 ```
 
 Both `put` and `get` suspend when they cannot immediately complete. Waiters are
-served **FIFO**. The level change is committed eagerly by the wake cascade (not
-on re-poll), so processes always see the correct level after `.await`.
+served in **strict head-of-line FIFO**: a freshly-arriving request never takes
+level/space ahead of an already-queued waiter, even when the current level would
+let it complete immediately, so a blocked head-of-queue request holds the line
+for everyone behind it (matching SimPy's `Container`). The level change is
+committed eagerly by the wake cascade (not on re-poll), so processes always see
+the correct level after `.await`.
 
 **`PreemptiveResource`** is a priority pool whose *in-use* units can be evicted
 by a higher-priority request:
@@ -491,6 +495,19 @@ returns `Ready` when the wake cascade explicitly marks it done — a
 spurious re-poll (from an unrelated waker) cannot steal capacity ahead of an
 earlier waiter and thereby violate FIFO ordering.
 
+### Head-of-line FIFO on the immediate path (`Container`)
+
+The `registered` flag keeps *already-queued* waiters in FIFO order, but a
+brand-new request is not yet registered. Its first poll has an immediate-completion
+fast path (level covers a `get`, or space covers a `put`). To keep **strict
+head-of-line FIFO** — and match SimPy — that fast path is gated on
+`has_live_get_waiter` / `has_live_put_waiter`: if any non-canceled waiter of the
+same kind is already queued, the fresh request must register behind it rather than
+take level/space out of turn. Without this guard a small `get` could slip past a
+blocked larger `get` whenever the level happened to cover the small one. A blocked
+head-of-queue request therefore holds the line for everyone behind it (including
+the SimPy-style case where this stalls a fresh op that would otherwise fit).
+
 ### `canceled` flag on waiter entries
 
 If a registered request-future is dropped before being granted (for example,
@@ -518,7 +535,12 @@ get, which immediately enables another put, and so on, all within a single call.
 Both immediate-completion paths (`get` and `put`) run the *full* cascade. An
 earlier asymmetry — where the immediate `put` path woke only get-waiters — could
 strand a put-waiter that a freshly-woken get had just made serviceable; see
-`reviews/2026-06-08-architecture-review.md` (Findings 1 & 2).
+`reviews/2026-06-08-architecture-review.md` (Findings 1 & 2). Note that under the
+strict head-of-line FIFO guard above, a fresh immediate `put` can no longer
+coexist with a blocked put-waiter ahead of it (it would register behind instead),
+so a single cascade call now only ever services one queue; the bidirectional
+single-pass behaviour is retained as defensive correctness but is unreachable via
+the public API.
 
 ### `RngGuard` and the no-await invariant
 
@@ -531,7 +553,7 @@ misuse. This makes deterministic sampling safe by construction.
 
 ## 5. MVP Feature Set
 
-**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (87 passing tests),
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (88 passing tests),
 clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
@@ -554,7 +576,7 @@ clippy-clean (`-D warnings`), and benchmarked.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Test suite (87 unit + integration)  | Done ✅     |
+| Test suite (88 unit + integration)  | Done ✅     |
 | Criterion benchmark suite          | Done ✅     |
 
 ---

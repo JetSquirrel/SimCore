@@ -63,7 +63,7 @@ simu = { path = ".", features = ["monte-carlo"] }
 | `Resource` / `ResourceGuard` | FIFO capacity-limited pool; RAII release on guard drop |
 | `PriorityResource` | Priority-scheduled pool (lower number = higher priority; FIFO within a level) |
 | `PreemptiveResource` / `PreemptiveGuard` | Priority pool whose in-use units can be preempted by a higher-priority request (cooperative-at-yield) |
-| `Container` | Reservoir of continuous quantity (`put` / `get`, FIFO waiters) |
+| `Container` | Reservoir of continuous quantity (`put` / `get`, strict head-of-line FIFO waiters) |
 | `ProcessHandle<T>` | Observable spawn; `.await` for the return value, drop to detach |
 | `AnyOf` / `AllOf` | Future combinators via the `any_of!` / `all_of!` macros |
 
@@ -134,6 +134,25 @@ putaway) and outbound orders (pick → pack → load) share one small forklift f
 `PreemptiveResource` — urgent truck-side work evicts a routine putaway, whose driver parks the
 pallet and finishes it later. The first example to exercise `PreemptiveResource`. Logs to
 `target/sim-logs/warehouse_run_<N>.log`.
+
+## SimPy parity
+
+`compare/` cross-checks `simu` against Python's [SimPy](https://simpy.readthedocs.io/)
+as a reference oracle: identical JSON-contract models run on both engines and are
+compared on output-metric *distributions* across many seeds (correctness) and on
+wall-clock / events-per-sec / peak-RSS (performance). Canonical queue models are
+additionally checked against closed-form queueing theory, so neither engine is
+trusted blindly.
+
+```bash
+compare/run_comparison.sh             # build Rust, set up venv, write compare/REPORT.md
+compare/run_comparison.sh --no-perf   # correctness only
+```
+
+See [`compare/README.md`](compare/README.md) for methodology and
+[`compare/REPORT.md`](compare/REPORT.md) for the latest results. On the queue
+models simu runs ~10× faster at ~13× lower memory; the `Container` strict-FIFO
+divergence the harness originally surfaced is now fixed.
 
 ## License
 

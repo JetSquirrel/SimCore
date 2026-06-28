@@ -190,6 +190,122 @@ fn fifo_ordering_for_put_waiters() {
     assert_eq!(*log.borrow(), vec!["P1:1", "P2:2", "P3:3"]);
 }
 
+// Regression: head-of-line FIFO. A freshly-arriving small `get` must NOT take
+// level ahead of an already-blocked larger `get`, even when the current level
+// would cover the small one. This matches SimPy's Container and the documented
+// "served FIFO" contract. (Found by the compare/ SimPy harness: simu used to
+// let the small draw bypass the queue.)
+//
+// Setup: empty cap-10 container.
+//   - G_big: get(8) at t=0 -> level 0 < 8 -> blocks (get-waiter #1).
+//   - producer puts 5 at t=1: level 0 -> 5. G_big still blocked (5 < 8).
+//   - G_small: get(3) arrives at t=2, level is 5 >= 3 but G_big is queued
+//     ahead -> G_small must queue behind it, not jump in.
+//   - producer puts 5 at t=3: level 5 -> 10. Cascade serves G_big (10 -> 2),
+//     then G_small (2 < 3) stays blocked.
+//   - producer puts 1 at t=4: level 2 -> 3. Cascade serves G_small.
+#[test]
+fn fresh_small_get_queues_behind_blocked_large_get() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::empty(10.0);
+    let log = new_log();
+
+    // G_big blocks immediately at t=0.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.get(8.0).await;
+            log.borrow_mut().push(format!("G_big:{}", h.now()));
+        });
+    }
+    // G_small arrives later (t=2), when level (5) already covers its request.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            h.timeout(2.0).await;
+            c.get(3.0).await;
+            log.borrow_mut().push(format!("G_small:{}", h.now()));
+        });
+    }
+    // Producer drips material: +5 @ t=1, +5 @ t=3, +1 @ t=4.
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(1.0).await;
+            c.put(5.0).await;
+            h.timeout(2.0).await; // t=3
+            c.put(5.0).await;
+            h.timeout(1.0).await; // t=4
+            c.put(1.0).await;
+        });
+    }
+
+    env.run();
+
+    // Strict FIFO: G_big served first (at t=3), G_small only after (t=4) —
+    // even though at t=2 the level (5) already covered G_small's 3.
+    assert_eq!(*log.borrow(), vec!["G_big:3", "G_small:4"]);
+}
+
+// Symmetric head-of-line FIFO for the put queue: a fresh small `put` must not
+// take free space ahead of an earlier blocked larger `put`.
+//
+// Setup: cap-10 container starting full (level 10).
+//   - P_big: put(8) at t=0 -> 10 + 8 > 10 -> blocks (put-waiter #1).
+//   - consumer gets 5 at t=1: level 10 -> 5. P_big still blocked (5 + 8 > 10).
+//   - P_small: put(3) arrives at t=2, space is 5 (5 + 3 <= 10) but P_big is
+//     queued ahead -> P_small must queue behind it.
+//   - consumer gets 5 at t=3: level 5 -> 0. Cascade serves P_big (0 -> 8),
+//     then P_small (8 + 3 > 10) stays blocked.
+//   - consumer gets 1 at t=4: level 8 -> 7. Cascade serves P_small (7+3=10).
+#[test]
+fn fresh_small_put_queues_behind_blocked_large_put() {
+    let mut env = SimEnv::with_seed(0);
+    let c = Container::new(10.0, 10.0); // starts full
+    let log = new_log();
+
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            c.put(8.0).await;
+            log.borrow_mut().push(format!("P_big:{}", h.now()));
+        });
+    }
+    {
+        let h = env.handle();
+        let c = c.clone();
+        let log = log.clone();
+        env.spawn(async move {
+            h.timeout(2.0).await;
+            c.put(3.0).await;
+            log.borrow_mut().push(format!("P_small:{}", h.now()));
+        });
+    }
+    {
+        let h = env.handle();
+        let c = c.clone();
+        env.spawn(async move {
+            h.timeout(1.0).await;
+            c.get(5.0).await;
+            h.timeout(2.0).await; // t=3
+            c.get(5.0).await;
+            h.timeout(1.0).await; // t=4
+            c.get(1.0).await;
+        });
+    }
+
+    env.run();
+
+    assert_eq!(*log.borrow(), vec!["P_big:3", "P_small:4"]);
+}
+
 // ---------------------------------------------------------------------------
 // Cascade
 // ---------------------------------------------------------------------------
@@ -300,130 +416,58 @@ fn cascade_satisfies_multiple_gets() {
     assert_eq!(*log.borrow(), vec!["G1:1", "G2:1", "G3:1", "G4:1"]);
 }
 
-// Regression (review 2026-06-08, Finding 1): the immediate-`put` path used to
-// call only `wake_get_waiters`, so a get it woke could drain the level and free
-// space for a blocked *put*-waiter that was then never woken. The immediate-put
-// path must run the full `trigger_cascade`.
+// Note (strict-FIFO change, 2026-06-28): two earlier regressions
+// (`immediate_put_wakes_blocked_put_after_get_drains` and
+// `cascade_terminates_on_net_zero_level_delta`, review 2026-06-08 Findings 1 & 2)
+// were removed here. Both relied on a fresh *fitting* op of one type slipping
+// past an already-blocked *larger* op of the same type to kick a single
+// bidirectional cascade pass. That bypass was the FIFO violation fixed in this
+// change: a fresh put can no longer take space ahead of an earlier blocked put,
+// so those exact setups now deadlock (matching SimPy). The cascade's cross-queue
+// waking and work-driven loop are still exercised by `cascade_chain_get_put_get_put`,
+// `cascade_satisfies_multiple_gets`, and the put-side mirror below.
+
+// `trigger_cascade` must service *multiple* head-of-queue put-waiters in a single
+// pass when one immediate op frees enough space — the put-side mirror of
+// `cascade_satisfies_multiple_gets`, and the legal (FIFO-respecting) way to kick a
+// cross-queue cascade: an immediate `get` frees space, waking blocked `put`s.
 //
-// Setup: cap 10, level 6.
-//   - P_block: put(5) -> 6+5=11 > 10 -> blocks as a put-waiter.
-//   - G_block: get(8) -> 6 < 8       -> blocks as a get-waiter.
-//   - trigger: an immediate put(2) at t=1 raises level 6 -> 8, which wakes
-//     G_block (level 8 -> 0). That frees enough space for P_block (0+5 <= 10),
-//     which must now be serviced in the same cascade pass.
+// Setup: cap 10, level 10 (full).
+//   - P1: put(3) -> 10+3 > 10 -> blocks (put-waiter #1).
+//   - P2: put(3) -> blocks (put-waiter #2, FIFO behind P1).
+//   - trigger: immediate get(6) at t=1 -> level 10 -> 4 (no get-waiters ahead, so
+//     it is legal as an immediate get). The freed space wakes P1 (4+3=7) and then
+//     P2 (7+3=10) in one cascade pass.
 #[test]
-fn immediate_put_wakes_blocked_put_after_get_drains() {
+fn immediate_get_cascade_wakes_multiple_blocked_puts() {
     let mut env = SimEnv::with_seed(0);
-    let c = Container::new(10.0, 6.0);
+    let c = Container::new(10.0, 10.0); // starts full
     let log = new_log();
 
-    {
+    for name in ["P1", "P2"] {
         let h = env.handle();
         let c = c.clone();
         let log = log.clone();
         env.spawn(async move {
-            c.put(5.0).await;
-            log.borrow_mut().push(format!("P_block:{}", h.now()));
-        });
-    }
-    {
-        let h = env.handle();
-        let c = c.clone();
-        let log = log.clone();
-        env.spawn(async move {
-            c.get(8.0).await;
-            log.borrow_mut().push(format!("G_block:{}", h.now()));
-        });
-    }
-    {
-        let h = env.handle();
-        let c = c.clone();
-        env.spawn(async move {
-            h.timeout(1.0).await;
-            c.put(2.0).await;
-        });
-    }
-
-    env.run();
-
-    let entries = log.borrow();
-    assert!(
-        entries.contains(&"G_block:1".to_string()),
-        "get waiter must be served, got: {:?}",
-        entries,
-    );
-    assert!(
-        entries.contains(&"P_block:1".to_string()),
-        "put waiter must NOT be stranded after the woken get drains the level, got: {:?}",
-        entries,
-    );
-    // 6 (initial) +2 (trigger) -8 (G_block) +5 (P_block) = 5.
-    assert_eq!(c.level(), 5.0);
-}
-
-// Regression (review 2026-06-08, Finding 2): `trigger_cascade` must keep looping
-// while *any* waiter is serviced, even when a pass nets a zero level change.
-// Termination must be driven by "work done", never by a float-level delta.
-//
-// Setup: cap 12, level 5. A blocked get and a blocked put coexist because
-// get_amount + put_amount (8 + 8) exceeds capacity, so 4 < level < 8 blocks both.
-//   - GA: get(8) -> 5 < 8 blocks (get-waiter #1)
-//   - GB: get(8) -> blocks            (get-waiter #2)
-//   - PA: put(8) -> 5+8=13 > 12 blocks (put-waiter #1)
-//   - trigger: immediate put(3) at t=1 raises level 5 -> 8.
-//
-// First cascade pass: GA takes 8 (8 -> 0), then PA puts 8 (0 -> 8) — a net-zero
-// level change for the pass. A delta-based loop would break here, stranding GB
-// even though level is now 8 >= 8. A work-driven loop runs another pass and
-// serves GB.
-#[test]
-fn cascade_terminates_on_net_zero_level_delta() {
-    let mut env = SimEnv::with_seed(0);
-    let c = Container::new(12.0, 5.0);
-    let log = new_log();
-
-    // GA, GB: two get(8) waiters (registered in this order).
-    for name in ["GA", "GB"] {
-        let h = env.handle();
-        let c = c.clone();
-        let log = log.clone();
-        env.spawn(async move {
-            c.get(8.0).await;
+            c.put(3.0).await;
             log.borrow_mut().push(format!("{}:{}", name, h.now()));
         });
     }
-    // PA: a put(8) waiter — blocks because 5 + 8 > 12.
-    {
-        let h = env.handle();
-        let c = c.clone();
-        let log = log.clone();
-        env.spawn(async move {
-            c.put(8.0).await;
-            log.borrow_mut().push(format!("PA:{}", h.now()));
-        });
-    }
-    // Trigger: an immediate put(3) at t=1 (5 + 3 = 8 <= 12, so it does not block).
     {
         let h = env.handle();
         let c = c.clone();
         env.spawn(async move {
             h.timeout(1.0).await;
-            c.put(3.0).await;
+            c.get(6.0).await;
         });
     }
 
     env.run();
 
-    let entries = log.borrow();
-    assert!(entries.contains(&"GA:1".to_string()), "GA must be served: {:?}", entries);
-    assert!(entries.contains(&"PA:1".to_string()), "PA must be served: {:?}", entries);
-    assert!(
-        entries.contains(&"GB:1".to_string()),
-        "GB must NOT be stranded by a net-zero cascade pass: {:?}",
-        entries,
-    );
-    // 5 +3 (trigger) -8 (GA) +8 (PA) -8 (GB) = 0.
-    assert_eq!(c.level(), 0.0);
+    // Both puts serviced at t=1 in the same cascade pass; FIFO order preserved.
+    assert_eq!(*log.borrow(), vec!["P1:1", "P2:1"]);
+    // 10 (initial) -6 (get) +3 (P1) +3 (P2) = 10.
+    assert_eq!(c.level(), 10.0);
 }
 
 // ---------------------------------------------------------------------------
