@@ -1,5 +1,22 @@
 # Test Strategy
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `master` and on every pull
+request (Ubuntu):
+
+- **Rust job** — `cargo build`, `cargo clippy --all-targets -- -D warnings`, and
+  `cargo test`, each exercised for both the default build and the
+  `--features monte-carlo` (rayon) backend.
+- **SimPy parity job** — builds the release `compare` example, installs
+  `compare/requirements.txt`, and runs `compare/harness/run_correctness.py`. It
+  fails only on a genuine regression; accepted divergences on the
+  `KNOWN_EXCEPTIONS` allowlist are surfaced but do not fail the run.
+
+`rustfmt` is intentionally **not** enforced — parts of the codebase use manual
+column alignment (e.g. constant blocks in the examples) that `cargo fmt` would
+rewrite.
+
 ## Running the tests
 
 ```bash

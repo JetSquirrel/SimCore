@@ -1,5 +1,7 @@
 # simu
 
+[![CI](https://github.com/chkhm/simu/actions/workflows/ci.yml/badge.svg)](https://github.com/chkhm/simu/actions/workflows/ci.yml)
+
 A Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy but designed to be idiomatic Rust, high-performance, and scalable.
 
 **Goals:**
