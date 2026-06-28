@@ -125,12 +125,60 @@ level/space ahead of a live same-kind waiter. The `container` model now **passes
 hospital metrics (`blood_bank_waits`, `mean_blood_wait`, `critical_treated`) come
 into agreement too. See the `container` section of `REPORT.md`.
 
-## Open finding: hospital `early_discharged`
+## Open finding: `hospital.early_discharged` — eviction-handoff ordering
 
-A separate, smaller discrepancy remains in the `hospital` model: simu reports more
-`early_discharged` patients than SimPy (~4.1 vs ~3.5, ~15% relative; significant
-on the means though not on the KS distribution test). This is **unrelated to the
-Container FIFO fix** — every Container-driven hospital metric now passes. It
-points to a difference in the bed preemption / early-discharge path between
-`examples/hospital.rs` and the SimPy port (`models/hospital.py`), and is still
-under investigation.
+The hospital model's `early_discharged` metric diverges by ~15% (simu ~4.1 vs
+SimPy ~3.5; Welch t-test p≈0.002, but **KS p≈0.22** — a means shift, not a clear
+distributional difference). Unlike the now-resolved `Container` finding above,
+this is **not** a semantic bug in either port and it is **independent of the
+blood-bank FIFO question**: the two engines run byte-identical eviction logic, and
+the gap is the same whether or not `Container` is strict-FIFO.
+
+**What's the same.** Both `examples/hospital.rs` and `compare/models/hospital.py`
+implement the identical preemption rule: when a *critical* patient finishes its
+blood draw and all beds are occupied, it fires the longest-admitted patient's
+eviction event (an entry in an `id -> Event` map), which loses its
+treatment-vs-eviction race and frees the bed. Instrumenting both engines confirms
+the count of "evictions fired" equals the count of `early_discharged` *exactly* in
+both — so there is **no spurious early-discharge**; every early discharge is a
+real, intended eviction.
+
+**Where the gap comes from.** The difference is entirely in *how often* a critical
+patient's "beds full → fire an eviction" branch is taken, and it decomposes
+cleanly (200 seeds × 1000 arrivals):
+
+| engine | crit. checks | beds full at check | evictions fired | = early_discharged |
+|--------|-------------:|-------------------:|----------------:|-------------------:|
+| simu   | 14.1         | 4.11               | **4.11**        | 4.11               |
+| SimPy  | 14.5         | 3.91               | **3.48**        | 3.48               |
+
+The dominant term is the **fired vs. beds-full gap**: SimPy fires on only ~89% of
+beds-full checks (3.48 / 3.91); simu fires on **100%** (4.11 / 4.11). That gap is
+the *eviction-handoff window*. When critical patient X evicts victim V, V is
+removed from the eviction map immediately but keeps holding its bed until its
+process is next scheduled and releases it. During that window the beds are still
+"full" but one occupant is no longer in the map. If another critical patient
+checks during the window and the map has gone empty, it finds **nobody to evict**
+and simply waits for the bed that is already coming free.
+
+SimPy's generator/callback execution (`event.succeed()` → `Condition` callback →
+process resume → `Resource.release` → re-trigger) inserts several scheduling hops
+between the eviction and the victim's release, *widening* that window — so the
+"beds full but map empty, skip the eviction" case occurs ~0.4×/seed. simu's
+poll/waker execution hands the bed off in a tighter sequence (the evicted victim
+releases and the evictor re-acquires and re-registers in the map before another
+critical can observe an empty map), so the window is effectively zero and the
+map is never empty when beds are full. Because each fired eviction admits a new
+patient who immediately re-populates the map, the effect is mildly
+self-reinforcing, which is why a sub-timestep ordering difference shows up as a
+~0.6-event mean shift.
+
+**Verdict — acceptable modeling difference.** Both ports faithfully implement the
+same rule; `early_discharged` is just unusually sensitive to *simultaneous-event
+tie-breaking* during the eviction handoff, which legitimately differs between the
+two engines' execution models. Neither tie-breaking is "more correct": a newly
+arriving critical patient that evicts the longest-admitted occupant even though a
+bed is already being freed (simu) is as defensible as one that waits for the
+in-flight release (SimPy). Making the metric engine-agnostic would require
+redesigning the model's eviction accounting (e.g. tracking in-flight evictions
+explicitly) rather than fixing a port — so the harness surfaces it here instead.
