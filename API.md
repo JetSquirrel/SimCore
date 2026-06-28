@@ -161,7 +161,7 @@ is a no-op. `PreemptiveResource: Clone` — all clones share the same pool.
 
 ## `Container`
 
-Continuous quantity with bounded capacity; separate FIFO queues for producers and consumers.
+Continuous quantity with bounded capacity; separate **strict head-of-line FIFO** queues for producers and consumers. A fresh `put`/`get` never jumps ahead of an already-queued waiter, even when the current level would let it complete immediately, so a blocked head-of-queue request holds the line behind it (matching SimPy).
 
 ```rust
 use simu::Container;
