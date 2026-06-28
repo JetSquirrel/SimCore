@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Minimal token; no write access needed.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (build · test · clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --verbose
+
+      # Clippy must stay warning-clean on both the default build and the
+      # rayon-backed monte-carlo feature.
+      - name: Clippy (default)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (monte-carlo feature)
+        run: cargo clippy --all-targets --features monte-carlo -- -D warnings
+
+      # Test both monte_carlo::run backends: std::thread (default) and rayon.
+      - name: Test (default backend)
+        run: cargo test --verbose
+
+      - name: Test (rayon monte-carlo backend)
+        run: cargo test --verbose --features monte-carlo
+
+  simpy-parity:
+    name: SimPy parity (correctness harness)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # The harness shells out to this release binary (built with the rayon
+      # feature, matching compare/run_comparison.sh).
+      - name: Build comparison runner (release)
+        run: cargo build --release --features monte-carlo --example compare
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: compare/requirements.txt
+
+      - name: Install Python dependencies (simpy, numpy, scipy)
+        run: pip install -r compare/requirements.txt
+
+      # Exits non-zero only on a genuine regression: exact-mode queue models must
+      # match seed-by-seed, and the hospital model must stay within its
+      # distributional gate. Accepted divergences on the KNOWN_EXCEPTIONS
+      # allowlist are surfaced but do not fail the run.
+      - name: Run SimPy correctness harness
+        env:
+          PYTHONPATH: compare/harness:compare/models
+          PYTHONUNBUFFERED: "1"
+        run: python compare/harness/run_correctness.py
