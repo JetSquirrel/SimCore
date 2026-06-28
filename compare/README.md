@@ -126,6 +126,15 @@ negligible difference becomes significant purely because there are many seeds.
 For `mm1`/`mmc` the report also prints the closed-form Erlang-C mean wait; both
 engines should land near it.
 
+**Known exceptions.** A small allowlist of `(model, metric)` pairs
+(`KNOWN_EXCEPTIONS` in `harness/run_correctness.py`) marks *accepted, documented*
+divergences. A failing metric on the allowlist is rendered as `known ⚠` and the
+model's status becomes `✅ PASS (N known exceptions)`; it is surfaced in the
+report but does **not** fail the run, so the harness exits non-zero only on a
+non-allowlisted FAIL — ready to gate CI on real regressions. The only current
+entry is `hospital.early_discharged` (see below). Keep the list as small as the
+evidence allows; every entry must have an explanation in this README.
+
 ### Keeping the two feeds in lockstep
 
 `compare/models/_feed.py` is a hand-maintained twin of `src/rng.rs`. Both
@@ -239,3 +248,10 @@ bed is already being freed (simu) is as defensible as one that waits for the
 in-flight release (SimPy). Making the metric engine-agnostic would require
 redesigning the model's eviction accounting (e.g. tracking in-flight evictions
 explicitly) rather than fixing a port — so the harness surfaces it here instead.
+
+Because it is accepted and well understood, `("hospital", "early_discharged")`
+is on the `KNOWN_EXCEPTIONS` allowlist in `harness/run_correctness.py`: the
+report still shows the divergence (as `known ⚠`), but it no longer fails the run,
+so a future CI job can gate on genuine regressions. If a fix or a deliberate
+model redesign ever brings it into agreement, drop that entry so the metric is
+held to the normal gate again.

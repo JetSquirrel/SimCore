@@ -323,6 +323,12 @@ The portable feed's cross-language known-answer test (`compare/models/test_feed.
 shares its SplitMix64 vectors with the Rust `rng` unit tests, so the two
 implementations cannot silently drift.
 
+Accepted, documented divergences (currently just `hospital.early_discharged`)
+are listed in a `KNOWN_EXCEPTIONS` allowlist in `harness/run_correctness.py`:
+they are surfaced in the report as `known ⚠` but do not fail the run, so the
+harness exits non-zero only on a genuine regression — ready to gate a future CI
+job.
+
 ## Key implementation notes
 
 - **Sequential process execution within a tick**: the executor runs each process

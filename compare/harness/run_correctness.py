@@ -31,6 +31,18 @@ import contract
 # exact per-seed comparison. `hospital` is excluded (eviction-handoff ordering).
 EXACT_MODELS = {"mm1", "mmc", "priority", "container"}
 
+# Accepted, documented divergences keyed by (model, metric). A failure here is
+# reported as a *known exception* — surfaced in the table but NOT counted as a
+# build failure — so CI can gate on real regressions only. Each entry must have
+# a corresponding explanation in compare/README.md. Keep this list as small as
+# the evidence allows: anything not listed that fails is a hard FAIL.
+KNOWN_EXCEPTIONS = {
+    # Eviction-handoff event ordering at identical timestamps differs between
+    # simu (poll/waker) and SimPy (generator/callback); not an RNG difference,
+    # so the shared feed cannot remove it. See compare/README.md.
+    ("hospital", "early_discharged"),
+}
+
 
 def _summary(xs):
     n = len(xs)
@@ -96,13 +108,21 @@ def compare_model(model, seeds, n, lam, mu, servers, tol, alpha, exact_tol):
         b = contract.column(simpy, key)
         row = compare_metric(a, b, tol, alpha, exact, exact_tol)
         row["metric"] = key
+        # A failing metric on the allowlist is a tolerated, documented exception.
+        row["known"] = (model, key) in KNOWN_EXCEPTIONS
         rows.append(row)
+    hard_failures = [r for r in rows if not r["passed"] and not r["known"]]
+    known_failures = [r for r in rows if not r["passed"] and r["known"]]
     return {
         "model": model, "seeds": seeds, "n": n,
         "lam": lam, "mu": mu, "servers": servers,
         "exact": exact,
         "rows": rows,
-        "all_passed": all(r["passed"] for r in rows),
+        # Genuinely clean (every metric matched).
+        "genuine_pass": all(r["passed"] for r in rows),
+        # Build-gating status: clean OR only known exceptions failed.
+        "all_passed": len(hard_failures) == 0,
+        "n_known": len(known_failures),
     }
 
 
@@ -148,12 +168,20 @@ def render_markdown(results):
         "- **Exact mode** (mm1, mmc, priority, container): every metric must "
         "agree **seed-by-seed** within 1e-9 relative; FAIL otherwise.\n"
         "- **Distributional mode** (hospital): FAIL = statistically significant "
-        "(t-test p < 0.01) **and** material (relative mean difference > 5%); the "
-        "`early_discharged` metric is a documented eviction-handoff ordering "
-        "exception (see README).\n"
+        "(t-test p < 0.01) **and** material (relative mean difference > 5%).\n"
+        "- **Known exceptions** (marked `known ⚠`): accepted, documented "
+        "divergences that are surfaced but do **not** fail the run — currently "
+        "`hospital.early_discharged` (eviction-handoff event ordering; see "
+        "README). The harness exits non-zero only on a non-allowlisted FAIL.\n"
     )
     for res in results:
-        status = "✅ PASS" if res["all_passed"] else "❌ FAIL"
+        if res["genuine_pass"]:
+            status = "✅ PASS"
+        elif res["all_passed"]:
+            n = res["n_known"]
+            status = f"✅ PASS ({n} known exception{'s' if n != 1 else ''})"
+        else:
+            status = "❌ FAIL"
         mode = "exact" if res["exact"] else "distributional"
         lines.append(
             f"### {res['model']}  ({status}, {mode}) — "
@@ -167,7 +195,12 @@ def render_markdown(results):
         )
         lines.append("|---|---|---|---|---|---|---|---|")
         for r in res["rows"]:
-            mark = "pass" if r["passed"] else "**FAIL**"
+            if r["passed"]:
+                mark = "pass"
+            elif r["known"]:
+                mark = "known ⚠"
+            else:
+                mark = "**FAIL**"
             lines.append(
                 f"| {r['metric']} | {r['mean_simu']:.4g} ± {r['sem_simu']:.2g} "
                 f"| {r['mean_simpy']:.4g} ± {r['sem_simpy']:.2g} "
@@ -213,8 +246,11 @@ def main():
     a = p.parse_args()
     results = run_all(scale=a.scale, tol=a.tol, alpha=a.alpha, exact_tol=a.exact_tol)
     print(render_markdown(results))
-    if not all(r["all_passed"] for r in results):
-        raise SystemExit(1)
+    # Known exceptions (allowlisted divergences) are surfaced above but do not
+    # fail the run — only a non-allowlisted FAIL does.
+    failed = [r["model"] for r in results if not r["all_passed"]]
+    if failed:
+        raise SystemExit(f"correctness FAILED for: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
