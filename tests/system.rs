@@ -119,3 +119,31 @@ fn monte_carlo_run() {
     // Results are returned in seed order, each equal to its seed value.
     assert_eq!(results, vec![0.0, 1.0, 2.0, 3.0]);
 }
+
+#[test]
+fn dropping_env_reclaims_suspended_processes() {
+    // A process that blocks forever stays suspended in the process table after
+    // run() returns. Because the future captures an EnvHandle (which points back
+    // at SimState), it forms a reference cycle; dropping the SimEnv must break it
+    // so the process — and anything it captured — is reclaimed, not leaked.
+    use std::rc::Weak;
+
+    let probe = Rc::new(());
+    let weak: Weak<()> = Rc::downgrade(&probe);
+
+    {
+        let mut env = SimEnv::with_seed(0);
+        let (_trigger, awaitable) = env.event();
+        env.spawn(async move {
+            let _held = probe; // captured by the suspended future
+            awaitable.await; // never fires → process stays suspended
+        });
+        env.run();
+        assert!(weak.upgrade().is_some(), "process should be alive during the run");
+    } // env dropped here
+
+    assert!(
+        weak.upgrade().is_none(),
+        "suspended process leaked: SimState↔process cycle not broken on drop"
+    );
+}

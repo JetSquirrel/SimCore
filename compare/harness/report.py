@@ -29,6 +29,8 @@ def main():
     if not a.no_perf:
         perf = run_performance.run_all(scale=a.perf_scale)
         sections.append(run_performance.render_markdown(perf))
+        montecarlo = run_performance.run_all_montecarlo(scale=a.perf_scale)
+        sections.append(run_performance.render_montecarlo(montecarlo))
 
     with open(REPORT, "w") as f:
         f.write("\n".join(sections) + "\n")

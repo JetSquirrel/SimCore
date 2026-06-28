@@ -11,10 +11,20 @@ Cross-checks the `simu` Rust DES engine against Python's
    memory for each engine on the same workloads.
 
 Both engines emit the **same JSON contract**, so the harness compares them
-directly. Because Rust's `StdRng` (ChaCha12) and NumPy draw different number
-streams from the same seed, **bit-identical traces are not expected** — the
-comparison is at the level of distributions across replications, which is robust
-to RNG differences.
+directly. They also draw from the **same portable random feed**: the Rust
+`SplitMix64` generator plus the `simu::rng::sample` transforms (`src/rng.rs`) are
+re-implemented byte-for-byte in Python (`compare/models/_feed.py`). Seeded
+identically per replication, the two engines draw the same numbers and turn them
+into the same samples, so for the order-insensitive models the harness compares
+**per-seed metrics exactly** (within ~1e-15, just floating-point summation
+order) — far tighter than the old distributions-only comparison.
+
+The one model that is **not** exact-eligible is `hospital`: its
+`early_discharged` metric depends on simultaneous-event tie-breaking during the
+eviction handoff, which legitimately differs between the two engines' execution
+models (detailed below). That is an *engine* ordering difference, not an RNG one,
+so the shared feed cannot remove it — `hospital` stays on the distributional
+test.
 
 ## Layout
 
@@ -23,19 +33,24 @@ compare/
 ├── requirements.txt          # simpy, numpy, scipy
 ├── models/                   # SimPy models (one JSON-emitting script each)
 │   ├── _common.py            # CLI parsing + JSON emission + seed loop
+│   ├── _feed.py              # portable SplitMix64 + transforms (twin of src/rng.rs)
+│   ├── test_feed.py          # cross-language known-answer test (shared with Rust)
 │   ├── queue_model.py        # shared M/M/c logic
 │   ├── mm1.py  mmc.py  priority_queue.py  container.py  hospital.py
 ├── harness/
 │   ├── contract.py           # subprocess runners + result schema + RSS/timing
-│   ├── run_correctness.py    # distribution tests + Erlang-C ground truth
+│   ├── run_correctness.py    # exact (per-seed) + distribution tests + Erlang-C ground truth
 │   ├── run_performance.py    # wall-clock / events-per-sec / peak memory
 │   └── report.py             # writes REPORT.md, exit non-zero on FAIL
 └── run_comparison.sh         # build Rust, set up venv, run everything
 ```
 
 The Rust side is `examples/compare.rs` (built with
-`cargo build --release --example compare`). It shares no code with the harness —
-it is a pure consumer of the public `simu` API and prints one JSON object.
+`cargo build --release --features monte-carlo --example compare`). It shares no
+code with the harness — it is a pure consumer of the public `simu` API and prints
+one JSON object. The `monte-carlo` feature is only needed for the parallel Monte
+Carlo benchmark (it switches `monte_carlo::run` to rayon's bounded pool); the
+correctness and single-thread performance comparisons work without it.
 
 ## Running
 
@@ -53,7 +68,7 @@ compare/run_comparison.sh --no-perf
 Or drive pieces directly after `source compare/.venv/bin/activate`:
 
 ```bash
-cargo build --release --example compare
+cargo build --release --features monte-carlo --example compare
 PYTHONPATH=compare/harness:compare/models python compare/harness/run_correctness.py --scale 0.5
 PYTHONPATH=compare/harness:compare/models python compare/harness/run_performance.py --scale 0.2
 ```
@@ -87,7 +102,16 @@ events/sec is comparable across tools.
 
 ## Correctness methodology
 
-For each metric we take the per-seed arrays from both tools and compare
+Because both tools draw from the same feed, most models are checked in **exact
+mode**, with the distributional test reserved for the one model that legitimately
+diverges on engine tie-breaking.
+
+**Exact mode** (`mm1`, `mmc`, `priority`, `container`). The per-seed metric
+arrays from the two tools are aligned by seed and every value must match within a
+tight relative tolerance (`--exact-tol`, default `1e-9`); a metric **FAILS**
+otherwise. In practice the residual is ~1e-15 (floating-point summation order).
+
+**Distributional mode** (`hospital`). The per-seed arrays are compared as
 distributions:
 
 - **Welch's t-test** on the means (`scipy.stats.ttest_ind`, `equal_var=False`).
@@ -101,6 +125,40 @@ negligible difference becomes significant purely because there are many seeds.
 
 For `mm1`/`mmc` the report also prints the closed-form Erlang-C mean wait; both
 engines should land near it.
+
+**Known exceptions.** A small allowlist of `(model, metric)` pairs
+(`KNOWN_EXCEPTIONS` in `harness/run_correctness.py`) marks *accepted, documented*
+divergences. A failing metric on the allowlist is rendered as `known ⚠` and the
+model's status becomes `✅ PASS (N known exceptions)`; it is surfaced in the
+report but does **not** fail the run, so the harness exits non-zero only on a
+non-allowlisted FAIL — ready to gate CI on real regressions. The only current
+entry is `hospital.early_discharged` (see below). Keep the list as small as the
+evidence allows; every entry must have an explanation in this README.
+
+### Keeping the two feeds in lockstep
+
+`compare/models/_feed.py` is a hand-maintained twin of `src/rng.rs`. Both
+`compare/models/test_feed.py` (Python) and the `rng` unit tests in `src/rng.rs`
+(Rust) assert the **same** SplitMix64 known-answer table, so if either side
+drifts, one of the two test suites fails. Run the Python side with
+`python compare/models/test_feed.py`.
+
+## Performance methodology
+
+The performance report has two parts:
+
+1. **Single-thread engine efficiency.** One large replication per model (the
+   hospital model is scaled by seed count instead, since it ignores `n`), run
+   sequentially in both tools. This isolates per-event overhead — Rust vs CPython
+   — and yields the wall-clock / events-per-sec / peak-RSS table.
+2. **Monte Carlo parallelism.** Many independent replications, where simu fans the
+   seeds across threads via `monte_carlo::run` (rayon pool) while SimPy runs them
+   sequentially — CPython's GIL prevents thread parallelism. The headline column
+   is simu-parallel vs SimPy-sequential wall-clock: roughly the single-thread
+   speedup multiplied by parallel scaling (saturating near the logical-core
+   count). The parallel run is byte-identical to the sequential one (same seeds,
+   results in seed order), so it costs no correctness. This is the axis SimPy
+   structurally cannot follow.
 
 ## Resolved finding: `Container` strict-FIFO
 
@@ -133,6 +191,14 @@ distributional difference). Unlike the now-resolved `Container` finding above,
 this is **not** a semantic bug in either port and it is **independent of the
 blood-bank FIFO question**: the two engines run byte-identical eviction logic, and
 the gap is the same whether or not `Container` is strict-FIFO.
+
+The shared feed makes this especially clear: now that both engines consume an
+identical draw stream, every other hospital metric matches **exactly** per seed
+(`critical_treated`, `standard_treated`, `blood_bank_waits`, `mean_nurse_wait`,
+`mean_blood_wait` → max per-seed Δ = 0). The divergence is confined to
+`early_discharged` and its small downstream cascade (`mean_bed_wait`,
+`ed_cleared_at`), which is exactly what an execution-order — not RNG — difference
+looks like. This is why `hospital` stays on the distributional test.
 
 **What's the same.** Both `examples/hospital.rs` and `compare/models/hospital.py`
 implement the identical preemption rule: when a *critical* patient finishes its
@@ -182,3 +248,10 @@ bed is already being freed (simu) is as defensible as one that waits for the
 in-flight release (SimPy). Making the metric engine-agnostic would require
 redesigning the model's eviction accounting (e.g. tracking in-flight evictions
 explicitly) rather than fixing a port — so the harness surfaces it here instead.
+
+Because it is accepted and well understood, `("hospital", "early_discharged")`
+is on the `KNOWN_EXCEPTIONS` allowlist in `harness/run_correctness.py`: the
+report still shows the divergence (as `known ⚠`), but it no longer fails the run,
+so a future CI job can gate on genuine regressions. If a fix or a deliberate
+model redesign ever brings it into agreement, drop that entry so the metric is
+held to the normal gate again.

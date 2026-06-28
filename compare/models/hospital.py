@@ -13,10 +13,10 @@ Mirrors the same parameters and the same statistical-comparison policy:
 Ignores --n/--lambda/--mu (the model carries its own constants).
 """
 
-import numpy as np
 import simpy
 
 from _common import run
+from _feed import SplitMix64
 
 SIM_DURATION = 480.0
 ARRIVAL_SCALE = 8.0      # mean inter-arrival (1 / rate)
@@ -32,7 +32,7 @@ BLOOD_STANDARD = 2.0
 
 
 def run_seed(seed, args):
-    rng = np.random.Generator(np.random.PCG64(seed))
+    rng = SplitMix64(seed)
     env = simpy.Environment()
     nurse = simpy.PriorityResource(env, capacity=1)
     beds = simpy.Resource(env, capacity=3)
@@ -106,7 +106,7 @@ def run_seed(seed, args):
             if env.now > SIM_DURATION:
                 break
             treatment = rng.exponential(MEAN_TREATMENT)
-            triage = 0 if rng.random() < CRITICAL_PROB else 1
+            triage = 0 if rng.bernoulli(CRITICAL_PROB) else 1
             env.process(patient(pid, triage, treatment))
             pid += 1
 

@@ -68,7 +68,8 @@ The environment is split into two types:
 - **`EnvHandle`** — a lightweight, `Clone`able handle that processes use to interact with the simulation.
   Obtained via `env.handle()` and passed into spawned processes.
 
-Both share the same underlying `SimState` and `StdRng` via `Rc<RefCell<>>`.
+Both share the same underlying `SimState` and the same randomness source — a boxed,
+pluggable `RandomSource` (`Rc<RefCell<Box<dyn RandomSource>>>`) defaulting to `StdRng`.
 
 `SimEnv` is `!Send + !Sync` (via `Rc`) and must live on one thread.
 
@@ -79,8 +80,15 @@ impl SimEnv {
     /// Create a new environment seeded from OS entropy.
     pub fn new() -> Self;
 
-    /// Create with a specific RNG seed for reproducibility.
+    /// Create with a specific RNG seed for reproducibility (StdRng).
     pub fn with_seed(seed: u64) -> Self;
+
+    /// Create driven by a custom, pluggable randomness source — e.g. the
+    /// portable `SplitMix64` feed used for exact cross-engine comparison.
+    pub fn with_source<R: RandomSource + 'static>(source: R) -> Self;
+
+    /// Reseed the active randomness source, restarting its stream.
+    pub fn set_seed(&self, seed: u64);
 
     /// Return a cloneable handle for passing into processes.
     pub fn handle(&self) -> EnvHandle;
@@ -544,16 +552,47 @@ the public API.
 
 ### `RngGuard` and the no-await invariant
 
-`EnvHandle::rng()` returns an `impl RngCore + '_` wrapper over a `RefMut` into
-the SimEnv's RNG. Because `RefMut` is `!Send` and borrows `self`, the returned
-guard cannot cross an `.await` point — the compiler rejects any such
-misuse. This makes deterministic sampling safe by construction.
+`EnvHandle::rng()` returns an `impl RngCore + '_` wrapper over a
+`RefMut<Box<dyn RandomSource>>` into the SimEnv's randomness source. Because
+`RefMut` is `!Send` and borrows `self`, the returned guard cannot cross an
+`.await` point — the compiler rejects any such misuse. Only one guard may be
+live at a time (a second overlapping `env.rng()` panics with `RefCell already
+borrowed`). This makes deterministic sampling safe by construction.
+
+### `SimEnv::drop` and the process reference cycle
+
+A suspended process future captures an `EnvHandle`, which holds
+`Rc<RefCell<SimState>>` — so `SimState → processes → future → EnvHandle →
+SimState` forms a reference cycle. While a simulation runs this is harmless, and
+processes that complete are removed from the table. But a run that *ends* with
+processes still suspended (e.g. one blocked forever on a resource that never
+frees) would leave the cycle intact, leaking the entire `SimState`; across many
+replications the leak accumulates linearly. `SimEnv`'s `Drop` therefore clears
+the process tables on teardown — taking them out from under the `RefCell` borrow
+first, then dropping them, so a suspended future's destructor may safely re-enter
+the env. This breaks the cycle and lets each replication be reclaimed.
+
+### Pluggable randomness (`RandomSource`)
+
+The RNG is stored as `Box<dyn RandomSource>` rather than a concrete `StdRng`, so
+the entropy source can be swapped without making `SimEnv` generic. `RandomSource`
+is a thin trait over `rand::RngCore` adding `reseed`; it is implemented for
+`StdRng` and for the portable `SplitMix64` feed (`src/rng.rs`). The dynamic
+dispatch costs one indirect call per draw — negligible against simulation work.
+
+`SplitMix64` is defined purely by wrapping `u64` arithmetic, so it can be
+re-implemented byte-for-byte in another language. Paired with the closed-form
+transforms in `rng::sample` (`uniform01` / `exponential` / `bernoulli` /
+`normal`), two engines seeded with the same value draw the same number stream and
+produce the same samples (to floating-point tolerance). This is what lets the
+SimPy comparison harness compare per-seed metrics *exactly* rather than only in
+distribution — see `compare/models/_feed.py` and `compare/README.md`.
 
 ---
 
 ## 5. MVP Feature Set
 
-**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (88 passing tests),
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (103 passing tests),
 clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
@@ -576,7 +615,8 @@ clippy-clean (`-D warnings`), and benchmarked.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Test suite (88 unit + integration)  | Done ✅     |
+| Test suite (103 unit + integration) | Done ✅     |
+| Pluggable `RandomSource` + portable `SplitMix64` feed | Done ✅ |
 | Criterion benchmark suite          | Done ✅     |
 
 ---

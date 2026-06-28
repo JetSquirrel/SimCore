@@ -11,12 +11,13 @@ definitions:
   * throughput   = customers / horizon
 """
 
-import numpy as np
 import simpy
+
+from _feed import SplitMix64
 
 
 def run_queue_seed(seed, n, lam, mu, servers):
-    rng = np.random.Generator(np.random.PCG64(seed))
+    rng = SplitMix64(seed)
     env = simpy.Environment()
     server = simpy.Resource(env, capacity=servers)
     recs = []  # (wait, service, departure)

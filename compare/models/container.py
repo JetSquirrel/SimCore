@@ -10,10 +10,10 @@ two tools here reveals whether simu agrees. Self-contained constants; ignores
 --lambda/--mu/--servers.
 """
 
-import numpy as np
 import simpy
 
 from _common import run
+from _feed import SplitMix64
 
 CAP = 1000.0
 ARRIVAL_SCALE = 1.0
@@ -26,7 +26,7 @@ PUT_INTERVAL = 1.0
 
 def run_seed(seed, args):
     n = args.n
-    rng = np.random.Generator(np.random.PCG64(seed))
+    rng = SplitMix64(seed)
     env = simpy.Environment()
     cont = simpy.Container(env, capacity=CAP, init=0.0)
     recs = []  # (large, wait)
@@ -39,7 +39,7 @@ def run_seed(seed, args):
         for _ in range(n):
             yield env.timeout(rng.exponential(ARRIVAL_SCALE))
             arrival = env.now
-            large = rng.random() < P_LARGE
+            large = rng.bernoulli(P_LARGE)
             amount = LARGE if large else SMALL
             env.process(consumer(amount, large, arrival))
 
