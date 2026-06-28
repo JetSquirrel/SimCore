@@ -24,11 +24,13 @@ env.run();
 ## `SimEnv`
 
 ```rust
-SimEnv::new() -> SimEnv
-SimEnv::with_seed(seed: u64) -> SimEnv
+SimEnv::new() -> SimEnv                          // seeded from OS entropy (StdRng)
+SimEnv::with_seed(seed: u64) -> SimEnv           // fixed seed, StdRng
+SimEnv::with_source(source: impl RandomSource) -> SimEnv  // custom feed (e.g. SplitMix64)
 
 env.handle()       -> EnvHandle          // cloneable handle to pass into spawned processes
 env.now()          -> f64
+env.set_seed(seed: u64)                  // reseed the active RandomSource (restarts its stream)
 env.spawn(future)  -> ProcessHandle<T>   // spawn a root process
 env.timeout(delay) -> Timeout            // await to pause for `delay` time units
 env.event()        -> (EventTrigger, EventAwaitable)
@@ -229,6 +231,42 @@ let results: Vec<R> = monte_carlo::run(seeds, |seed| {
 });
 // results are in seed-iteration order; panics in workers re-panic on caller thread
 ```
+
+---
+
+## Random feed (`simu::rng`)
+
+By default a `SimEnv` draws from `rand`'s `StdRng`. To drive it from a portable,
+cross-language stream — for reproducibility or exact comparison against another
+engine — plug in a `RandomSource`:
+
+```rust
+use simu::rng::{sample, SplitMix64};
+use simu::SimEnv;
+
+let mut env = SimEnv::with_source(SplitMix64::new(42));
+
+// Shared closed-form transforms (mirrored in compare/models/_feed.py):
+let dt   = sample::exponential(&mut env.handle().rng(), 20.0); // mean = 20
+let u    = sample::uniform01(&mut env.handle().rng());         // [0, 1)
+let hit  = sample::bernoulli(&mut env.handle().rng(), 0.3);    // p = 0.3
+let x    = sample::normal(&mut env.handle().rng(), 0.0, 1.0);  // Box–Muller, 2 draws
+```
+
+```rust
+// Any RngCore can be a source; implement RandomSource for reseed support.
+pub trait RandomSource: rand::RngCore {
+    fn reseed(&mut self, seed: u64);   // default panics; StdRng & SplitMix64 override
+}
+
+SplitMix64::new(seed: u64) -> SplitMix64   // portable PRNG (also impls RngCore)
+feed.set_seed(seed: u64)                   // restart the stream
+```
+
+- `SplitMix64` is defined purely by integer arithmetic, so it can be re-implemented
+  identically in another language. With the `sample::*` transforms, two engines seeded
+  the same draw the same numbers and produce the same samples (to fp tolerance).
+- `sample::*` work over **any** `RngCore`, including the default `StdRng`.
 
 ---
 

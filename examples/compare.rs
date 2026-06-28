@@ -6,6 +6,12 @@
 //! JSON contract so the harness can compare distributions across many seeds and
 //! measure relative performance. See `compare/README.md`.
 //!
+//! Randomness comes from the portable [`SplitMix64`] feed plus the shared
+//! [`sample`] transforms, both re-implemented byte-for-byte in
+//! `compare/models/_feed.py`. Seeded with the same value, the Rust and Python
+//! runs draw the same numbers and turn them into the same samples, so the
+//! harness can compare per-seed metrics exactly (not just in distribution).
+//!
 //! Usage:
 //!   cargo run --release --example compare -- \
 //!       --model mm1 --seeds 1000 --n 1000 --lambda 0.9 --mu 1.0 --servers 1
@@ -14,18 +20,23 @@
 //!   mm1       M/M/1 queue (single server)
 //!   mmc       M/M/c queue (`--servers c`)
 //!   priority  two-class priority queue (PriorityResource, 50/50 split)
+//!   container Container head-of-line FIFO stress test
 //!   hospital  faithful port of examples/hospital.rs (ignores --n/--lambda/--mu)
+//!
+//! Flags:
+//!   --parallel  run the seed replications across threads via monte_carlo::run
+//!               (build with `--features monte-carlo` for the rayon pool). Output
+//!               is identical to the sequential run; only wall-clock differs.
 //!
 //! JSON is hand-written (no serde), mirroring the JSONL approach already used by
 //! examples/warehouse.rs.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use rand::Rng;
-use rand_distr::Exp;
+use simu::rng::{sample, SplitMix64};
 use simu::{any_of, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
@@ -39,6 +50,10 @@ struct Args {
     lambda: f64,
     mu: f64,
     servers: usize,
+    /// Run the seed replications in parallel via `monte_carlo::run` instead of
+    /// the default sequential loop. Build with `--features monte-carlo` so the
+    /// parallelism uses rayon's bounded pool (one std::thread per seed otherwise).
+    parallel: bool,
 }
 
 fn parse_args() -> Args {
@@ -49,11 +64,18 @@ fn parse_args() -> Args {
         lambda: 0.9,
         mu: 1.0,
         servers: 1,
+        parallel: false,
     };
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < argv.len() {
         let key = argv[i].as_str();
+        // `--parallel` is a valueless flag; everything else is `--key value`.
+        if key == "--parallel" {
+            args.parallel = true;
+            i += 1;
+            continue;
+        }
         let val = argv.get(i + 1).cloned().unwrap_or_default();
         match key {
             "--model" => args.model = val,
@@ -125,13 +147,11 @@ async fn queue_arrivals(
     mu: f64,
     recs: Rc<RefCell<Vec<Rec>>>,
 ) {
-    let arr = Exp::new(lambda).unwrap();
-    let srv = Exp::new(mu).unwrap();
     for _ in 0..n {
-        let inter_arrival = env.rng().sample(arr);
+        let inter_arrival = sample::exponential(&mut env.rng(), 1.0 / lambda);
         env.timeout(inter_arrival).await;
         let arrival = env.now();
-        let service = env.rng().sample(srv);
+        let service = sample::exponential(&mut env.rng(), 1.0 / mu);
         env.spawn(queue_customer(
             env.clone(),
             res.clone(),
@@ -144,7 +164,7 @@ async fn queue_arrivals(
 
 /// One queue replication. Returns the per-seed JSON object body.
 fn run_queue(seed: u64, n: u64, lambda: f64, mu: f64, servers: usize) -> String {
-    let mut env = SimEnv::with_seed(seed);
+    let mut env = SimEnv::with_source(SplitMix64::new(seed));
     let res = Resource::new(servers);
     let recs: Rc<RefCell<Vec<Rec>>> = Rc::new(RefCell::new(Vec::with_capacity(n as usize)));
 
@@ -217,14 +237,12 @@ async fn prio_arrivals(
     mu: f64,
     recs: Rc<RefCell<Vec<PRec>>>,
 ) {
-    let arr = Exp::new(lambda).unwrap();
-    let srv = Exp::new(mu).unwrap();
     for _ in 0..n {
-        let inter_arrival = env.rng().sample(arr);
+        let inter_arrival = sample::exponential(&mut env.rng(), 1.0 / lambda);
         env.timeout(inter_arrival).await;
         let arrival = env.now();
-        let service = env.rng().sample(srv);
-        let prio: u32 = if env.rng().gen::<f64>() < 0.5 { 0 } else { 1 };
+        let service = sample::exponential(&mut env.rng(), 1.0 / mu);
+        let prio: u32 = if sample::bernoulli(&mut env.rng(), 0.5) { 0 } else { 1 };
         env.spawn(prio_customer(
             env.clone(),
             res.clone(),
@@ -237,7 +255,7 @@ async fn prio_arrivals(
 }
 
 fn run_priority(seed: u64, n: u64, lambda: f64, mu: f64, servers: usize) -> String {
-    let mut env = SimEnv::with_seed(seed);
+    let mut env = SimEnv::with_source(SplitMix64::new(seed));
     let res = PriorityResource::new(servers);
     let recs: Rc<RefCell<Vec<PRec>>> = Rc::new(RefCell::new(Vec::with_capacity(n as usize)));
 
@@ -311,12 +329,11 @@ async fn c_consumer(
 }
 
 async fn c_arrivals(env: EnvHandle, cont: Container, n: u64, recs: Rc<RefCell<Vec<CRec>>>) {
-    let arr = Exp::new(1.0 / C_ARRIVAL_SCALE).unwrap();
     for _ in 0..n {
-        let inter_arrival = env.rng().sample(arr);
+        let inter_arrival = sample::exponential(&mut env.rng(), C_ARRIVAL_SCALE);
         env.timeout(inter_arrival).await;
         let arrival = env.now();
-        let large = env.rng().gen::<f64>() < C_P_LARGE;
+        let large = sample::bernoulli(&mut env.rng(), C_P_LARGE);
         let amount = if large { C_LARGE } else { C_SMALL };
         env.spawn(c_consumer(
             env.clone(),
@@ -337,7 +354,7 @@ async fn c_producer(env: EnvHandle, cont: Container, puts: u64) {
 }
 
 fn run_container(seed: u64, n: u64) -> String {
-    let mut env = SimEnv::with_seed(seed);
+    let mut env = SimEnv::with_source(SplitMix64::new(seed));
     let cont = Container::new(C_CAP, 0.0);
     let recs: Rc<RefCell<Vec<CRec>>> = Rc::new(RefCell::new(Vec::with_capacity(n as usize)));
 
@@ -424,17 +441,15 @@ async fn h_restock(env: EnvHandle, ctx: HCtx) {
 }
 
 async fn h_arrivals(env: EnvHandle, ctx: HCtx) {
-    let arrivals_dist = Exp::new(H_ARRIVAL_RATE).unwrap();
-    let treatment_dist = Exp::new(1.0 / H_MEAN_TREATMENT).unwrap();
     let mut patient_id = 1_u32;
     loop {
-        let inter_arrival = env.rng().sample(arrivals_dist);
+        let inter_arrival = sample::exponential(&mut env.rng(), 1.0 / H_ARRIVAL_RATE);
         env.timeout(inter_arrival).await;
         if env.now() > H_SIM_DURATION {
             break;
         }
-        let treatment = env.rng().sample(treatment_dist);
-        let is_critical = env.rng().gen::<f64>() < H_CRITICAL_PROB;
+        let treatment = sample::exponential(&mut env.rng(), H_MEAN_TREATMENT);
+        let is_critical = sample::bernoulli(&mut env.rng(), H_CRITICAL_PROB);
         let triage = if is_critical { 0_u32 } else { 1_u32 };
         env.spawn(h_patient(env.clone(), patient_id, triage, treatment, ctx.clone()));
         patient_id += 1;
@@ -505,7 +520,7 @@ async fn h_patient(env: EnvHandle, id: u32, triage: u32, treatment: f64, ctx: HC
 }
 
 fn run_hospital(seed: u64) -> String {
-    let mut env = SimEnv::with_seed(seed);
+    let mut env = SimEnv::with_source(SplitMix64::new(seed));
     let ctx = HCtx {
         nurse: PriorityResource::new(1),
         beds: Resource::new(3),
@@ -540,43 +555,29 @@ fn run_hospital(seed: u64) -> String {
 fn main() {
     let args = parse_args();
 
+    // Time the replications. `--parallel` fans the seeds out across threads via
+    // monte_carlo::run (results still come back in seed order, so output is
+    // identical to the sequential path); otherwise run them in a plain loop.
+    let start = Instant::now();
+    let per_seed: Vec<String> = if args.parallel {
+        let model = args.model.clone();
+        let (n, lambda, mu, servers) = (args.n, args.lambda, args.mu, args.servers);
+        simu::monte_carlo::run(0..args.seeds, move |seed| {
+            run_model(&model, seed, n, lambda, mu, servers)
+        })
+    } else {
+        (0..args.seeds)
+            .map(|seed| run_model(&args.model, seed, args.n, args.lambda, args.mu, args.servers))
+            .collect()
+    };
+    let wall_secs = start.elapsed().as_secs_f64();
+
     // Event count uses an identical, model-specific definition on both sides so
     // events/sec is comparable across tools (see compare/README.md).
-    let events = Cell::new(0_u64);
-
-    let start = Instant::now();
-    let mut per_seed: Vec<String> = Vec::with_capacity(args.seeds as usize);
-    for seed in 0..args.seeds {
-        let body = match args.model.as_str() {
-            "mm1" => {
-                events.set(events.get() + 2 * args.n); // arrival + departure per customer
-                run_queue(seed, args.n, args.lambda, args.mu, 1)
-            }
-            "mmc" => {
-                events.set(events.get() + 2 * args.n);
-                run_queue(seed, args.n, args.lambda, args.mu, args.servers)
-            }
-            "priority" => {
-                events.set(events.get() + 2 * args.n);
-                run_priority(seed, args.n, args.lambda, args.mu, args.servers)
-            }
-            "container" => {
-                let body = run_container(seed, args.n);
-                // events := arrivals (n) + completed gets (served).
-                events.set(events.get() + args.n + field_u64(&body, "served"));
-                body
-            }
-            "hospital" => {
-                let body = run_hospital(seed);
-                // events := completed patients (two transitions each).
-                events.set(events.get() + 2 * count_completed(&body));
-                body
-            }
-            other => panic!("unknown model: {other}"),
-        };
-        per_seed.push(body);
-    }
-    let wall_secs = start.elapsed().as_secs_f64();
+    let events: u64 = per_seed
+        .iter()
+        .map(|body| events_for(&args.model, body, args.n))
+        .sum();
 
     let meta = obj(&[
         ("tool", "\"simu\"".to_string()),
@@ -586,11 +587,37 @@ fn main() {
         ("lambda", num(args.lambda)),
         ("mu", num(args.mu)),
         ("servers", args.servers.to_string()),
-        ("events", events.get().to_string()),
+        ("events", events.to_string()),
         ("wall_secs", num(wall_secs)),
+        ("parallel", args.parallel.to_string()),
         ("per_seed", format!("[{}]", per_seed.join(","))),
     ]);
     println!("{meta}");
+}
+
+/// Dispatch one replication of `model` at `seed`, returning its per-seed JSON
+/// body. Self-contained so it can run either in the sequential loop or as the
+/// closure handed to `monte_carlo::run`.
+fn run_model(model: &str, seed: u64, n: u64, lambda: f64, mu: f64, servers: usize) -> String {
+    match model {
+        "mm1" => run_queue(seed, n, lambda, mu, 1),
+        "mmc" => run_queue(seed, n, lambda, mu, servers),
+        "priority" => run_priority(seed, n, lambda, mu, servers),
+        "container" => run_container(seed, n),
+        "hospital" => run_hospital(seed),
+        other => panic!("unknown model: {other}"),
+    }
+}
+
+/// Model-specific simulated-event tally for one per-seed body (identical
+/// definition on the SimPy side, so events/sec is comparable across tools).
+fn events_for(model: &str, body: &str, n: u64) -> u64 {
+    match model {
+        "mm1" | "mmc" | "priority" => 2 * n, // one arrival + one departure per customer
+        "container" => n + field_u64(body, "served"), // arrivals + completed gets
+        "hospital" => 2 * count_completed(body), // two transitions per completed patient
+        other => panic!("unknown model: {other}"),
+    }
 }
 
 /// Read a numeric field out of an already-formatted per-seed JSON body so the

@@ -77,13 +77,17 @@ def _measure(cmd, cwd=None):
     return result
 
 
-def run_simu(model, seeds, n=1000, lam=0.9, mu=1.0, servers=1):
+def run_simu(model, seeds, n=1000, lam=0.9, mu=1.0, servers=1, parallel=False):
     if not os.path.exists(SIMU_BIN):
         raise FileNotFoundError(
             f"{SIMU_BIN} not found — build it with "
-            "`cargo build --release --example compare`"
+            "`cargo build --release --features monte-carlo --example compare`"
         )
     cmd = [SIMU_BIN] + _args_list(model, seeds, n, lam, mu, servers)
+    if parallel:
+        # Fan the seeds out across threads (SimPy has no equivalent — the GIL
+        # serialises it). Needs the rayon-backed `monte-carlo` feature build.
+        cmd.append("--parallel")
     return _measure(cmd)
 
 

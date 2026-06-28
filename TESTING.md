@@ -42,8 +42,8 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (80 integration tests + 8 inline unit tests).
-(The per-file percentages below were last measured before the `WaitQueue`/`PreemptiveResource`
+Current coverage: **~98% lines** across all library source files (86 integration tests + 17 inline unit tests).
+(The per-file percentages below were last measured before the `WaitQueue`/`PreemptiveResource`/`rng`
 additions; re-run `cargo llvm-cov` to refresh.)
 
 | File | Line coverage |
@@ -55,6 +55,7 @@ additions; re-run `cargo llvm-cov` to refresh.)
 | `resource/mod.rs` | 100% |
 | `resource/wait_queue.rs` | covered by inline unit tests |
 | `resource/preemptive.rs` | covered by `tests/preemptive_resource.rs` |
+| `rng.rs` | covered by inline unit tests + `tests/external_feed.rs` |
 | `monte_carlo.rs` | 100% |
 | `env.rs` | 99% |
 | `executor/queue.rs` | 90% |
@@ -219,7 +220,7 @@ request future and its queue entry.
 | `dropped_container_put_does_not_add_level` | Cascade does not add level for a canceled `put` entry |
 | `dropped_container_get_does_not_starve_followup` | Live `get` waiter behind a canceled one is still served by a later `put` |
 
-### tests/system.rs — 3 tests
+### tests/system.rs — 4 tests
 
 Scenario: **Job Shop with Quality Gate** — a machine (`Resource`, capacity 1) and a
 quality gate (`EventTrigger`/`EventAwaitable`). No job may start until the inspector
@@ -230,6 +231,38 @@ fires the gate at t=3. Three jobs then queue for the machine sequentially.
 | `test_system_all_primitives` | Exact event trace with fixed durations: `["gate:3", "job1_done:5", "job2_done:7", "job3_done:9"]`, `env.now() == 9.0` |
 | `test_system_determinism` | Same seed → identical trace; different seed → different trace (RNG-driven durations) |
 | `monte_carlo_run` | `monte_carlo::run` spawns one thread per seed, returns results in seed order |
+| `dropping_env_reclaims_suspended_processes` | Dropping a `SimEnv` with a still-suspended process breaks the `SimState`↔process `Rc` cycle (no leak across replications) |
+
+### tests/external_feed.rs — 5 tests
+
+Scenario: a small M/M/1-style model driven by `SimEnv::with_source(SplitMix64::new(seed))`,
+exercising the pluggable external random feed (`src/rng.rs`).
+
+| Test | What it verifies |
+|---|---|
+| `same_seed_produces_identical_trace` | Two runs with the same seed produce an identical trace (full determinism) |
+| `different_seeds_diverge` | Different seeds produce different traces |
+| `set_seed_restarts_the_stream` | `SimEnv::set_seed` reseeds the source, restarting its stream |
+| `env_feed_matches_standalone_splitmix64` | The env feed and a standalone `SplitMix64` produce the same samples |
+| `handles_share_one_feed` | All `EnvHandle` clones draw from one shared feed (draws interleave, not restart) |
+
+### src/rng.rs — 9 inline unit tests
+
+Inline `#[cfg(test)]` module covering the portable feed. The SplitMix64
+known-answer table is the **same** one asserted by `compare/models/test_feed.py`,
+guarding against cross-language drift.
+
+| Test | What it verifies |
+|---|---|
+| `splitmix64_known_answer_vectors` | Canonical SplitMix64 outputs for seeds 0 and 42 |
+| `uniform01_and_exponential_known_answer` | `uniform01`/`exponential` produce the exact shared-table values |
+| `uniform01_in_unit_interval` | `uniform01` stays in `[0, 1)` |
+| `next_u32_is_high_bits_of_next_u64` | `next_u32` takes the high 32 bits (matches the Python feed) |
+| `same_seed_same_stream` | Two feeds with the same seed produce the same stream |
+| `reseed_restarts_stream` | `reseed`/`set_seed` restart the stream |
+| `exponential_mean_is_sane` | Sampled exponential mean converges to the target |
+| `normal_consumes_two_draws_and_is_centered` | `normal` consumes exactly two uniforms and is centered |
+| `stdrng_reseed_is_deterministic` | `RandomSource::reseed` on `StdRng` is deterministic |
 
 ### src/executor/queue.rs — 3 inline unit tests
 
@@ -272,12 +305,23 @@ N values are the parameterized workload sizes passed to `BenchmarkId`.
 ## Cross-engine parity (SimPy)
 
 Beyond the `cargo test` suite, the `compare/` harness validates `simu` against
-Python's [SimPy](https://simpy.readthedocs.io/) as a reference oracle — comparing
-output-metric distributions across many seeds (and queue models against closed-form
-queueing theory) plus relative performance. It is what surfaced the `Container`
-strict-FIFO divergence (since fixed). Run it with `compare/run_comparison.sh`; see
+Python's [SimPy](https://simpy.readthedocs.io/) as a reference oracle. Both
+engines draw from the **same portable feed** (`SplitMix64` + shared transforms,
+re-implemented in `compare/models/_feed.py`), so the order-insensitive queue
+models are checked in **exact mode** — per-seed metrics must match within 1e-9
+(they land ~1e-15) — while `hospital` stays on the distributional test for its
+eviction-handoff ordering exception. Queue models are also checked against
+closed-form queueing theory. Performance is measured on two axes: single-thread
+engine efficiency, and a **Monte Carlo** benchmark where simu parallelises
+independent replications via `monte_carlo::run` (rayon) while SimPy is
+GIL-serialised. The harness is what surfaced the `Container` strict-FIFO
+divergence (since fixed). Run it with `compare/run_comparison.sh`; see
 [`compare/README.md`](compare/README.md) for methodology and
 [`compare/REPORT.md`](compare/REPORT.md) for the latest results.
+
+The portable feed's cross-language known-answer test (`compare/models/test_feed.py`)
+shares its SplitMix64 vectors with the Rust `rng` unit tests, so the two
+implementations cannot silently drift.
 
 ## Key implementation notes
 

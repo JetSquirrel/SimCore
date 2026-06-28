@@ -1,13 +1,24 @@
-"""Correctness comparison: are simu and SimPy statistically indistinguishable?
+"""Correctness comparison: are simu and SimPy indistinguishable?
 
-For each model we run R replications in both tools and compare the *distribution*
-of every output metric across seeds (not seed-by-seed — the two tools draw
-different random streams, so only the distributions are expected to agree).
+Both tools now draw from the *same* portable feed (SplitMix64 + shared
+transforms — see `compare/models/_feed.py` and `src/rng.rs`), seeded identically
+per replication. So for the order-insensitive models the comparison runs in
+**exact mode**: seed-by-seed, every metric must agree to a tight relative
+tolerance (`--exact-tol`, default 1e-9). The only residual is floating-point
+summation order, which lands ~1e-15.
 
-A metric FAILS only when the difference is both **statistically significant**
-(Welch's t-test p < alpha) **and material** (relative mean difference > tol).
-That "significant AND material" gate avoids the large-sample trap where a
-negligible difference becomes significant purely because R is large.
+One model is *not* exact-eligible and stays on the distributional test:
+
+  * `hospital` — the `early_discharged` metric is sensitive to simultaneous-event
+    tie-breaking during the eviction handoff, which legitimately differs between
+    the engines' execution models (see `compare/README.md`). It is an *engine*
+    ordering difference, not an RNG one, so a shared feed cannot remove it.
+
+For distributional (non-exact) models a metric FAILS only when the difference is
+both **statistically significant** (Welch's t-test p < alpha) **and material**
+(relative mean difference > tol) — the "significant AND material" gate avoids the
+large-sample trap where a negligible difference becomes significant purely
+because R is large.
 """
 
 import math
@@ -15,6 +26,10 @@ import math
 from scipy import stats
 
 import contract
+
+# Models whose draw stream AND scheduling align seed-by-seed, so they support
+# exact per-seed comparison. `hospital` is excluded (eviction-handoff ordering).
+EXACT_MODELS = {"mm1", "mmc", "priority", "container"}
 
 
 def _summary(xs):
@@ -24,32 +39,54 @@ def _summary(xs):
     return mean, sem
 
 
-def compare_metric(a, b, tol, alpha):
-    """Compare metric arrays `a` (simu) and `b` (simpy)."""
+def _max_rel_per_seed(a, b):
+    """Largest relative difference between aligned per-seed values."""
+    if len(a) != len(b):
+        return float("nan")
+    worst = 0.0
+    for ai, bi in zip(a, b):
+        denom = max(abs(ai), abs(bi), 1e-12)
+        worst = max(worst, abs(ai - bi) / denom)
+    return worst
+
+
+def compare_metric(a, b, tol, alpha, exact, exact_tol):
+    """Compare metric arrays `a` (simu) and `b` (simpy), aligned by seed."""
     mean_a, sem_a = _summary(a)
     mean_b, sem_b = _summary(b)
     denom = max(abs(mean_a), abs(mean_b), 1e-12)
     rel_diff = abs(mean_a - mean_b) / denom
+    max_rel = _max_rel_per_seed(a, b)
 
     # Welch t-test on means; KS on the whole distribution (informational).
     if len(set(a)) <= 1 and len(set(b)) <= 1:
         t_p = 1.0 if mean_a == mean_b else 0.0
     else:
         t_p = float(stats.ttest_ind(a, b, equal_var=False).pvalue)
-    ks_p = float(stats.ks_2samp(a, b).pvalue)
+    # method="asymp": several metrics are small integers with many ties, for
+    # which scipy's default exact KS calculation is invalid and warns before
+    # falling back to the asymptotic one anyway. Ask for asymptotic up front.
+    ks_p = float(stats.ks_2samp(a, b, method="asymp").pvalue)
 
-    significant = t_p < alpha
-    material = rel_diff > tol
-    passed = not (significant and material)
+    if exact:
+        # Shared feed ⇒ identical draws ⇒ per-seed metrics must match exactly
+        # (to floating-point tolerance).
+        passed = max_rel <= exact_tol
+    else:
+        significant = t_p < alpha
+        material = rel_diff > tol
+        passed = not (significant and material)
     return {
         "mean_simu": mean_a, "sem_simu": sem_a,
         "mean_simpy": mean_b, "sem_simpy": sem_b,
-        "rel_diff": rel_diff, "t_p": t_p, "ks_p": ks_p,
+        "rel_diff": rel_diff, "max_rel_per_seed": max_rel,
+        "t_p": t_p, "ks_p": ks_p,
         "passed": passed,
     }
 
 
-def compare_model(model, seeds, n, lam, mu, servers, tol, alpha):
+def compare_model(model, seeds, n, lam, mu, servers, tol, alpha, exact_tol):
+    exact = model in EXACT_MODELS
     simu = contract.run_simu(model, seeds, n, lam, mu, servers)
     simpy = contract.run_simpy(model, seeds, n, lam, mu, servers)
     keys = contract.metric_keys(simu)
@@ -57,12 +94,13 @@ def compare_model(model, seeds, n, lam, mu, servers, tol, alpha):
     for key in keys:
         a = contract.column(simu, key)
         b = contract.column(simpy, key)
-        row = compare_metric(a, b, tol, alpha)
+        row = compare_metric(a, b, tol, alpha, exact, exact_tol)
         row["metric"] = key
         rows.append(row)
     return {
         "model": model, "seeds": seeds, "n": n,
         "lam": lam, "mu": mu, "servers": servers,
+        "exact": exact,
         "rows": rows,
         "all_passed": all(r["passed"] for r in rows),
     }
@@ -93,37 +131,48 @@ def default_config(scale=1.0):
     ]
 
 
-def run_all(scale=1.0, tol=0.05, alpha=0.01):
+def run_all(scale=1.0, tol=0.05, alpha=0.01, exact_tol=1e-9):
     results = []
     for cfg in default_config(scale):
-        results.append(compare_model(tol=tol, alpha=alpha, **cfg))
+        results.append(compare_model(tol=tol, alpha=alpha, exact_tol=exact_tol, **cfg))
     return results
 
 
 def render_markdown(results):
-    lines = ["## Correctness: simu vs. SimPy (distribution equivalence)", ""]
+    lines = ["## Correctness: simu vs. SimPy", ""]
     lines.append(
-        "FAIL = statistically significant (t-test p < 0.01) **and** material "
-        "(relative mean difference > 5%).\n"
+        "Both tools draw from the same portable feed (SplitMix64 + shared "
+        "transforms), seeded identically per replication.\n"
+    )
+    lines.append(
+        "- **Exact mode** (mm1, mmc, priority, container): every metric must "
+        "agree **seed-by-seed** within 1e-9 relative; FAIL otherwise.\n"
+        "- **Distributional mode** (hospital): FAIL = statistically significant "
+        "(t-test p < 0.01) **and** material (relative mean difference > 5%); the "
+        "`early_discharged` metric is a documented eviction-handoff ordering "
+        "exception (see README).\n"
     )
     for res in results:
         status = "✅ PASS" if res["all_passed"] else "❌ FAIL"
+        mode = "exact" if res["exact"] else "distributional"
         lines.append(
-            f"### {res['model']}  ({status}) — "
+            f"### {res['model']}  ({status}, {mode}) — "
             f"{res['seeds']} seeds × {res['n']} arrivals, "
             f"λ={res['lam']}, μ={res['mu']}, c={res['servers']}"
         )
         lines.append("")
         lines.append(
-            "| metric | simu mean | simpy mean | rel.diff | t-test p | KS p | result |"
+            "| metric | simu mean | simpy mean | rel.diff | max/seed Δ | "
+            "t-test p | KS p | result |"
         )
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|")
         for r in res["rows"]:
             mark = "pass" if r["passed"] else "**FAIL**"
             lines.append(
                 f"| {r['metric']} | {r['mean_simu']:.4g} ± {r['sem_simu']:.2g} "
                 f"| {r['mean_simpy']:.4g} ± {r['sem_simpy']:.2g} "
-                f"| {r['rel_diff']*100:.2f}% | {r['t_p']:.3f} | {r['ks_p']:.3f} | {mark} |"
+                f"| {r['rel_diff']*100:.2f}% | {r['max_rel_per_seed']:.1e} "
+                f"| {r['t_p']:.3f} | {r['ks_p']:.3f} | {mark} |"
             )
         # Analytical ground-truth note for queue models.
         if res["model"] in ("mm1", "mmc"):
@@ -135,6 +184,21 @@ def render_markdown(results):
                 f"_Analytical mean wait (Erlang C) = **{wq:.3f}**; "
                 f"simu = {simu_wq:.3f}, simpy = {simpy_wq:.3f}._"
             )
+        # Expected-divergence note for the hospital model.
+        if res["model"] == "hospital":
+            lines.append("")
+            lines.append(
+                "_Note: differences here are **expected**, not a bug. Both engines "
+                "draw the identical random stream, so every metric that depends on "
+                "the random values matches exactly. The diverging metrics "
+                "(`early_discharged`, and its cascade into `mean_bed_wait` / "
+                "`ed_cleared_at`) depend instead on the **order in which events "
+                "scheduled at the same simulated timestamp fire** — which is "
+                "implementation-specific and differs between simu (poll/waker) and "
+                "SimPy (generator/callback) during the bed-eviction handoff. No "
+                "random number is consumed at that decision point, so a shared feed "
+                "cannot remove the difference. See `compare/README.md`._"
+            )
         lines.append("")
     return "\n".join(lines)
 
@@ -145,8 +209,9 @@ def main():
     p.add_argument("--scale", type=float, default=1.0)
     p.add_argument("--tol", type=float, default=0.05)
     p.add_argument("--alpha", type=float, default=0.01)
+    p.add_argument("--exact-tol", dest="exact_tol", type=float, default=1e-9)
     a = p.parse_args()
-    results = run_all(scale=a.scale, tol=a.tol, alpha=a.alpha)
+    results = run_all(scale=a.scale, tol=a.tol, alpha=a.alpha, exact_tol=a.exact_tol)
     print(render_markdown(results))
     if not all(r["all_passed"] for r in results):
         raise SystemExit(1)

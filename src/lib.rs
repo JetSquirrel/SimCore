@@ -4,6 +4,7 @@ pub mod event;
 pub mod monte_carlo;
 pub mod process;
 pub mod resource;
+pub mod rng;
 pub mod timeout;
 
 pub use combinator::{AllOf, AnyOf};
@@ -14,6 +15,7 @@ pub use resource::{Container, ContainerGetRequest, ContainerPutRequest};
 pub use resource::{PreemptiveGuard, PreemptiveRequest, PreemptiveResource};
 pub use resource::{PriorityResource, PriorityResourceGuard, PriorityResourceRequest};
 pub use resource::{Resource, ResourceGuard, ResourceRequest};
+pub use rng::{RandomSource, SplitMix64};
 pub use timeout::Timeout;
 
 mod executor;

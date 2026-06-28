@@ -12,8 +12,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPARE_DIR="$REPO_ROOT/compare"
 VENV="$COMPARE_DIR/.venv"
 
-echo "==> Building Rust comparison runner (release)"
-cargo build --release --example compare --manifest-path "$REPO_ROOT/Cargo.toml"
+echo "==> Building Rust comparison runner (release, rayon-backed monte-carlo)"
+# The monte-carlo feature switches monte_carlo::run to rayon's bounded pool,
+# which the parallel Monte Carlo benchmark relies on (one std::thread per seed
+# otherwise). It does not affect the sequential paths.
+cargo build --release --features monte-carlo --example compare --manifest-path "$REPO_ROOT/Cargo.toml"
 
 if [ ! -d "$VENV" ]; then
   echo "==> Creating Python venv at $VENV"

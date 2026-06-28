@@ -11,7 +11,11 @@ use rand::{RngCore, SeedableRng};
 use crate::event::{new_event, EventAwaitable, EventTrigger};
 use crate::executor::{make_waker, SimState};
 use crate::process::{spawn_with_handle, ProcessHandle};
+use crate::rng::RandomSource;
 use crate::timeout::Timeout;
+
+/// The boxed, pluggable randomness source shared by a `SimEnv` and its handles.
+type SharedRng = Rc<RefCell<Box<dyn RandomSource>>>;
 
 /// The simulation environment. Central coordinator for a single simulation run.
 ///
@@ -20,18 +24,18 @@ use crate::timeout::Timeout;
 /// separate threads.
 pub struct SimEnv {
     state: Rc<RefCell<SimState>>,
-    rng: Rc<RefCell<StdRng>>,
+    rng: SharedRng,
 }
 
 /// A lightweight handle to the simulation environment, intended to be cloned
 /// and passed into spawned processes.
 ///
 /// Both `SimEnv` and all `EnvHandle` clones share the same underlying
-/// `SimState` and the same `StdRng` instance.
+/// `SimState` and the same [`RandomSource`](crate::rng::RandomSource).
 #[derive(Clone)]
 pub struct EnvHandle {
     state: Rc<RefCell<SimState>>,
-    rng: Rc<RefCell<StdRng>>,
+    rng: SharedRng,
 }
 
 impl Default for SimEnv {
@@ -46,22 +50,48 @@ impl SimEnv {
     /// Use [`with_seed`](SimEnv::with_seed) when reproducibility is required.
     #[must_use]
     pub fn new() -> Self {
-        SimEnv {
-            state: Rc::new(RefCell::new(SimState::new())),
-            rng: Rc::new(RefCell::new(StdRng::from_entropy())),
-        }
+        SimEnv::from_source(Box::new(StdRng::from_entropy()))
     }
 
     /// Create a new environment with a fixed RNG seed.
     ///
     /// Given the same seed and process logic the simulation will produce
-    /// identical results across runs.
+    /// identical results across runs. Uses `rand`'s `StdRng`; for a portable,
+    /// cross-language stream use [`with_source`](SimEnv::with_source) with a
+    /// [`SplitMix64`](crate::rng::SplitMix64) feed instead.
     #[must_use]
     pub fn with_seed(seed: u64) -> Self {
+        SimEnv::from_source(Box::new(StdRng::seed_from_u64(seed)))
+    }
+
+    /// Create a new environment driven by a custom [`RandomSource`].
+    ///
+    /// Use this to plug in an external feed — e.g. the portable
+    /// [`SplitMix64`](crate::rng::SplitMix64) generator that the SimPy
+    /// comparison harness re-implements in Python:
+    ///
+    /// ```
+    /// use simu::{SimEnv, rng::SplitMix64};
+    /// let env = SimEnv::with_source(SplitMix64::new(42));
+    /// ```
+    #[must_use]
+    pub fn with_source<R: RandomSource + 'static>(source: R) -> Self {
+        SimEnv::from_source(Box::new(source))
+    }
+
+    fn from_source(source: Box<dyn RandomSource>) -> Self {
         SimEnv {
             state: Rc::new(RefCell::new(SimState::new())),
-            rng: Rc::new(RefCell::new(StdRng::seed_from_u64(seed))),
+            rng: Rc::new(RefCell::new(source)),
         }
+    }
+
+    /// Re-seed the environment's randomness source, restarting its stream.
+    ///
+    /// Delegates to [`RandomSource::reseed`]; panics if the active source does
+    /// not support reseeding.
+    pub fn set_seed(&self, seed: u64) {
+        self.rng.borrow_mut().reseed(seed);
     }
 
     /// Return a cloneable handle suitable for passing into spawned processes.
@@ -207,6 +237,30 @@ impl SimEnv {
     }
 }
 
+impl Drop for SimEnv {
+    /// Break the `SimState` ↔ process reference cycle on teardown.
+    ///
+    /// A suspended process future captures an `EnvHandle`, which holds an
+    /// `Rc<RefCell<SimState>>` — so `SimState → processes → future → EnvHandle →
+    /// SimState` is a cycle. If a simulation ends with processes still suspended
+    /// (e.g. one blocked forever on a resource that never frees), that cycle
+    /// keeps the whole `SimState` alive and leaks it; across many replications
+    /// the leak accumulates. Clearing the process tables drops those futures,
+    /// releasing their handles so `SimState` can be reclaimed.
+    fn drop(&mut self) {
+        // Move the tables out from under the borrow, then drop them *after*
+        // releasing it: a suspended future's destructor may itself touch the
+        // env (e.g. deregistering a waiter), which would re-enter the borrow.
+        let leftovers = self.state.try_borrow_mut().ok().map(|mut state| {
+            (
+                std::mem::take(&mut state.processes),
+                std::mem::take(&mut state.pending_spawns),
+            )
+        });
+        drop(leftovers);
+    }
+}
+
 impl EnvHandle {
     /// Current simulation time.
     #[must_use]
@@ -266,20 +320,20 @@ impl EnvHandle {
 }
 
 /// Newtype wrapper so `EnvHandle::rng()` can return an `impl RngCore + '_`
-/// without exposing `RefMut` in the public API.
-struct RngGuard<'a>(std::cell::RefMut<'a, StdRng>);
+/// without exposing `RefMut` or the boxed source in the public API.
+struct RngGuard<'a>(std::cell::RefMut<'a, Box<dyn RandomSource>>);
 
 impl RngCore for RngGuard<'_> {
     fn next_u32(&mut self) -> u32 {
-        self.0.next_u32()
+        (**self.0).next_u32()
     }
     fn next_u64(&mut self) -> u64 {
-        self.0.next_u64()
+        (**self.0).next_u64()
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.0.fill_bytes(dest)
+        (**self.0).fill_bytes(dest)
     }
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.0.try_fill_bytes(dest)
+        (**self.0).try_fill_bytes(dest)
     }
 }

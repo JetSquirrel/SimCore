@@ -21,7 +21,7 @@ When changing behaviour, keep `SPEC.md` and `API.md` in sync.
 
 ```bash
 cargo build
-cargo test                        # 88 passing tests across unit + integration suites
+cargo test                        # 103 passing tests across unit + integration suites
 cargo test <test_name>            # run a single test
 cargo run --example hospital      # ER patient-flow simulation
 cargo run --example brewery       # brewery / process-automation simulation
@@ -47,6 +47,7 @@ simu/
 │   ├── combinator.rs     # AnyOf, AllOf + any_of! / all_of! macros
 │   ├── process.rs        # ProcessHandle<T>, spawn_with_handle
 │   ├── monte_carlo.rs    # monte_carlo::run — std::thread (default) or rayon (monte-carlo feature)
+│   ├── rng.rs            # RandomSource trait, portable SplitMix64 feed, sample:: transforms
 │   └── resource/
 │       ├── mod.rs        # Resource, ResourceRequest, ResourceGuard (FIFO)
 │       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared wake-and-retry waiter bookkeeping
@@ -59,8 +60,9 @@ simu/
 │   └── warehouse.rs / warehouse.md
 ├── benches/
 │   └── simulation.rs     # Criterion benchmarks
-└── tests/                # 10 integration files: timeout, event, resource, priority_resource,
-                          # container, combinator, process_handle, dropped_awaitable, system, …
+└── tests/                # 11 integration files: timeout, event, resource, priority_resource,
+                          # container, combinator, process_handle, dropped_awaitable, system,
+                          # external_feed, …
 ```
 
 `executor/` is private (`mod executor;`) with `pub(crate)` items — not user-facing.
@@ -84,14 +86,16 @@ simu/
 - **`SimEnv`** owns simulation state and drives the event loop. Not `Clone`; one thread.
 - **`EnvHandle`** is a `Clone`able handle (`env.handle()`) passed into spawned processes. It exposes
   `now`, `timeout`, `event`, `spawn`, and `rng`.
-- Both share the same `Rc<RefCell<SimState>>` and the same `Rc<RefCell<StdRng>>`.
+- Both share the same `Rc<RefCell<SimState>>` and the same randomness source,
+  `Rc<RefCell<Box<dyn RandomSource>>>` (default `StdRng`; pluggable via `SimEnv::with_source`).
 
 ### Key types
 
 | Type | Role |
 |------|------|
-| `SimEnv` | Central coordinator: owns event loop, current time (`f64`), process table, seeded `StdRng`. Not `Clone`. |
+| `SimEnv` | Central coordinator: owns event loop, current time (`f64`), process table, pluggable `RandomSource` (default seeded `StdRng`). Not `Clone`. |
 | `EnvHandle` | `Clone`able handle into the env, passed to processes (`now`/`timeout`/`event`/`spawn`/`rng`) |
+| `RandomSource` / `SplitMix64` | Pluggable randomness source (`SimEnv::with_source`). `SplitMix64` is a portable feed re-implemented in Python (`compare/models/_feed.py`) for exact cross-engine comparison; `rng::sample::*` are the shared closed-form transforms |
 | `Timeout` | Future that resolves after a simulated delay |
 | `EventTrigger` / `EventAwaitable` | Manual inter-process signalling. `EventAwaitable` is `Clone` (multi-waiter); fire-before-await latch; `fire()` consumes the trigger |
 | `Resource` / `ResourceGuard` | FIFO-queued, capacity-limited pool; RAII release on guard drop |
@@ -135,9 +139,21 @@ by `Waker` vtables, which require `Send + Sync`. It is never actually contended.
 - **`canceled` flag** (`Rc<Cell<bool>>`) on waiter entries: a request dropped before it is granted
   (e.g. a losing `any_of!` arm) marks itself canceled; guard-release loops and the `Container` wake
   cascade skip canceled entries — no starvation, and no material leak in `Container`.
-- **`RngGuard`**: `EnvHandle::rng()` returns an `impl RngCore + '_` over a `RefMut`. Being `!Send` and
-  borrowing `self`, it cannot cross an `.await` — deterministic sampling is safe by construction.
-  Sample before awaiting.
+- **`RngGuard`**: `EnvHandle::rng()` returns an `impl RngCore + '_` over a `RefMut<Box<dyn RandomSource>>`.
+  Being `!Send` and borrowing `self`, it cannot cross an `.await` — deterministic sampling is safe by
+  construction. Sample before awaiting, and hold only one guard at a time (a second overlapping
+  `env.rng()` panics with `RefCell already borrowed`).
+- **`SimEnv::drop` breaks the process cycle**: a suspended process future captures an `EnvHandle`
+  holding `Rc<RefCell<SimState>>`, so `SimState → processes → future → EnvHandle → SimState` is a
+  reference cycle. A run that ends with processes still suspended (e.g. one blocked forever on a
+  resource that never frees, as in the hospital model) would leak the whole `SimState` — and the
+  leak accumulates across replications. `SimEnv`'s `Drop` clears the process tables (moving them out
+  from under the borrow first, so a future's destructor can re-enter the env safely), breaking the
+  cycle so each replication is reclaimed.
+- **Pluggable randomness**: the source is boxed (`Box<dyn RandomSource>`) so it can be swapped without
+  making `SimEnv` generic — one dyn-dispatch per draw, negligible vs. simulation work. Default is
+  `StdRng`; `SimEnv::with_source(SplitMix64::new(seed))` plugs in the portable feed used for exact
+  SimPy comparison. `SimEnv::set_seed` reseeds via `RandomSource::reseed`.
 
 ### Error strategy
 
@@ -157,7 +173,7 @@ panic-on-misuse only. No async runtime dependency — the executor is self-conta
 
 ## Status
 
-**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (88 passing tests),
+**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (103 passing tests),
 and clippy-clean: `SimEnv`/event queue, `Timeout`, manual `Event` (multi-waiter + fire-before-await
 latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `ProcessHandle<T>`,
 `AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG, deterministic tie-breaking,
@@ -168,6 +184,11 @@ latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `Proces
 - `PreemptiveResource` — priority pool with cooperative-at-yield preemption (`src/resource/preemptive.rs`).
 - `warehouse` example — distribution center whose forklift fleet (`PreemptiveResource`) is preempted
   between receiving and shipping; the first example to exercise preemption (`examples/warehouse.rs`).
+- External random feed (`src/rng.rs`) — pluggable `RandomSource` via `SimEnv::with_source`, the
+  portable `SplitMix64` generator, and shared `sample::*` transforms. Re-implemented byte-for-byte in
+  `compare/models/_feed.py`, so the SimPy comparison harness now runs the queue models in **exact
+  mode** (per-seed metrics agree to ~1e-15). `hospital.early_discharged` remains the sole exception
+  (engine eviction-handoff tie-breaking, not RNG).
 
 **Post-MVP (not yet implemented)** — see `SPEC.md §6`:
 

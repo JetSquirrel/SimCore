@@ -6,7 +6,8 @@ A Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy b
 
 - Model complex, process-oriented simulations (e.g. hospital operations, logistics, queuing systems)
 - Support thousands of concurrent simulation processes with low overhead
-- Reproducible results via seeded RNG
+- Reproducible results via seeded RNG, or a pluggable external feed (`SimEnv::with_source`) — e.g. the
+  portable `SplitMix64` generator that can be re-implemented in another language for exact cross-engine comparison
 - Monte Carlo parallelism across independent simulation runs using OS threads
 
 For full technical details — architecture, API design, resource model, and roadmap — see [SPEC.md](SPEC.md).  
@@ -139,10 +140,16 @@ pallet and finishes it later. The first example to exercise `PreemptiveResource`
 
 `compare/` cross-checks `simu` against Python's [SimPy](https://simpy.readthedocs.io/)
 as a reference oracle: identical JSON-contract models run on both engines and are
-compared on output-metric *distributions* across many seeds (correctness) and on
-wall-clock / events-per-sec / peak-RSS (performance). Canonical queue models are
-additionally checked against closed-form queueing theory, so neither engine is
-trusted blindly.
+compared per seed. Both sides draw from the **same portable feed** (`SplitMix64` +
+shared transforms, re-implemented in `compare/models/_feed.py`), so the queue
+models are checked in **exact mode** — per-seed metrics agree to ~1e-15 — while
+`hospital` stays on a distributional test for its eviction-handoff ordering
+exception. Performance is compared on two axes: single-thread engine efficiency
+(wall-clock / events-per-sec / peak-RSS), and a **Monte Carlo** benchmark where
+simu fans independent replications across cores via `monte_carlo::run` while
+SimPy is GIL-serialised — showing the full parallel advantage. Canonical queue
+models are additionally checked against closed-form queueing theory, so neither
+engine is trusted blindly.
 
 ```bash
 compare/run_comparison.sh             # build Rust, set up venv, write compare/REPORT.md
