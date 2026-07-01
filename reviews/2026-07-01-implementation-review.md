@@ -67,8 +67,35 @@ build, and the exact-mode `compare` models stay deterministic.
 | T2 | **FIXED** | `tests/adversarial_scheduling.rs` — same-batch double-release, preempt-during-batch, mixed container. |
 | T3 | **FIXED** | `priority_contention`/`preemptive_contention`/`container_throughput` bench groups. |
 | T4 | **FIXED** | `monte_carlo_propagates_worker_panic` (both backends). |
-| E1 | **FIXED** | `hospital` distinguishes the safety-net-deadline arm from a real ED clear. |
-| E2 | **PARTIAL** | Eviction comment + `compare.rs` in CLAUDE.md done; shared `log_dir` extraction left (cosmetic). |
+| E1 | **FIXED** | `hospital` distinguishes the safety-net-deadline arm from a real ED clear; `warehouse` fixed in the verification pass (below). |
+| E2 | **PARTIAL (ACK)** | Eviction comment + `compare.rs` in CLAUDE.md done; shared `log_dir` extraction deliberately skipped (cosmetic). |
+
+## Verification pass — 2026-07-01 (Fable 5)
+
+Independently audited the batch above, finding-by-finding, and re-ran the full
+gate. **Verdict: all findings genuinely addressed.** Notes from the audit:
+
+- **P1 empirically confirmed** (the claim class that failed once before in this
+  codebase): instrumented `EventAwaitable::poll` and re-polled a pending event
+  four times via `all_of!` — one waker push, three `will_wake` dedups, `waiters`
+  pinned at 1. Pre-P1 this accumulated one waker per re-poll.
+- **P2 audited for index safety**: ready-queue ids can only originate from wakers
+  created at admission (after the `Vec` resize), so `processes[id]` cannot go out
+  of bounds; `SimEnv::drop` still breaks the reference cycle with the `Vec` table.
+- **A5 proven with a new test** (`monte_carlo_accepts_borrowing_closure`,
+  both backends): the closure now genuinely borrows caller-stack data.
+- **Gaps found and fixed in this pass:**
+  - `warehouse.rs` had the same E1 sentinel flaw the review said to check
+    (deadline arm recorded into `day_cleared_at`); fixed like `hospital`, with a
+    distinct `day_not_cleared` JSONL event.
+  - Doc statements made stale by the fixes themselves: `wait_queue.rs`'s module
+    header still described the pre-F1 wake-and-retry protocol; SPEC §4.6 still
+    claimed the `Arc`-wrap/one-thread backend (pre-A5); SPEC §4.2 still showed
+    `set_seed(&self)` (pre-A7); SPEC §4.5 lacked `queue_len`/the Container
+    over-capacity panic (A6/F5); stale "103 passing tests" counts in SPEC and
+    CLAUDE.md; CLAUDE.md's wake-and-retry wording and 11-file test list.
+- Final gate after this pass: **133 tests + 7 doc-tests green** on both feature
+  sets, clippy clean on both, all examples run, no probe residue.
 
 ---
 

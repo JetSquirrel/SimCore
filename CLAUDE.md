@@ -21,7 +21,7 @@ When changing behaviour, keep `SPEC.md` and `API.md` in sync.
 
 ```bash
 cargo build
-cargo test                        # 103 passing tests across unit + integration suites
+cargo test                        # 133 passing tests across unit + integration suites (+7 doc-tests)
 cargo test <test_name>            # run a single test
 cargo run --example hospital      # ER patient-flow simulation
 cargo run --example brewery       # brewery / process-automation simulation
@@ -50,7 +50,7 @@ simu/
 │   ├── rng.rs            # RandomSource trait, portable SplitMix64 feed, sample:: transforms
 │   └── resource/
 │       ├── mod.rs        # Resource, ResourceRequest, ResourceGuard (FIFO)
-│       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared wake-and-retry waiter bookkeeping
+│       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared direct-handoff waiter bookkeeping
 │       ├── priority.rs   # PriorityResource (priority heap, FIFO within a level)
 │       ├── container.rs  # Container (continuous quantity, FIFO put/get)
 │       └── preemptive.rs # PreemptiveResource — priority pool with cooperative-at-yield preemption
@@ -61,9 +61,9 @@ simu/
 │   └── compare.rs        # SimPy-parity harness runner (JSON contract; not a showcase — see compare/)
 ├── benches/
 │   └── simulation.rs     # Criterion benchmarks
-└── tests/                # integration files: timeout, event, resource, priority_resource,
+└── tests/                # 13 integration files: timeout, event, resource, priority_resource,
                           # container, combinator, process_handle, dropped_awaitable, system,
-                          # external_feed, …
+                          # external_feed, same_tick_races, adversarial_scheduling, preemptive_resource
 ```
 
 `executor/` is private (`mod executor;`) with `pub(crate)` items — not user-facing.
@@ -121,8 +121,10 @@ with `SimEnv`.
 
 `Resource` and `PriorityResource` share one internal `pub(crate)` helper,
 `resource::wait_queue::WaitQueue<K>` (`WaitQueue<()>` = FIFO, `WaitQueue<u32>` = priority), which owns
-the capacity counters and the ordered waiter heap (`try_acquire`/`register`/`release`). `Container`
-keeps its own two-sided amount-based cascade (its commit-at-wake model doesn't fit wake-and-retry).
+the capacity counters and the ordered waiter heap (`try_acquire`/`register`/`release`). Release uses
+**direct handoff**: the unit is transferred to the next live waiter (`granted` flag) and is never
+observably free, so a same-tick fresh request cannot steal it (SPEC §4.7). `Container` keeps its own
+two-sided amount-based cascade with the same commit-at-wake character.
 
 ```rust
 let machine = Resource::new(1);
@@ -174,7 +176,7 @@ panic-on-misuse only. No async runtime dependency — the executor is self-conta
 
 ## Status
 
-**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (103 passing tests),
+**MVP COMPLETE ✅.** All MVP features in `SPEC.md §5` are implemented, tested (133 passing tests),
 and clippy-clean: `SimEnv`/event queue, `Timeout`, manual `Event` (multi-waiter + fire-before-await
 latch), `Resource` (FIFO + RAII guard), `PriorityResource`, `Container`, `ProcessHandle<T>`,
 `AnyOf`/`AllOf` + macros, `spawn`, `run`/`run_until`, seeded RNG, deterministic tie-breaking,

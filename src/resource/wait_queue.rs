@@ -1,10 +1,12 @@
-//! Shared waiter bookkeeping for the wake-and-retry resources.
+//! Shared waiter bookkeeping for the unit-pool resources.
 //!
 //! `Resource`, `PriorityResource` (and the post-MVP `PreemptiveResource`) all
-//! follow the same protocol: a request takes a free unit immediately if one is
-//! available, otherwise it parks a waker in an ordered queue; releasing a unit
-//! wakes the next live waiter, which re-polls and acquires. The only thing that
-//! differs between them is the *order* in which parked waiters are served.
+//! follow the same **direct-handoff** protocol: a request takes a free unit
+//! immediately if one is available, otherwise it parks a waker in an ordered
+//! queue; releasing a unit *transfers* it to the next live waiter (setting the
+//! waiter's `granted` flag and waking it) without the unit ever becoming
+//! observably free — see [`WaitQueue::release`]. The only thing that differs
+//! between the resource types is the *order* in which parked waiters are served.
 //!
 //! [`WaitQueue`] captures that protocol once. Waiters are served in ascending
 //! `(key, seq)` order — smallest key first, ties broken FIFO by an internal
@@ -12,9 +14,9 @@
 //! `K = ()` (every key equal → pure insertion order); priority scheduling uses
 //! `K = u32` (lower number = higher priority).
 //!
-//! Extracting this here keeps the `registered` / `canceled` / drop-cancel
-//! invariants (see `SPEC.md §4.7`) in a single place rather than copied across
-//! every resource type.
+//! Extracting this here keeps the `registered` / `canceled` / `granted` /
+//! drop-cancel invariants (see `SPEC.md §4.7`) in a single place rather than
+//! copied across every resource type.
 
 use std::cell::Cell;
 use std::cmp::Ordering;

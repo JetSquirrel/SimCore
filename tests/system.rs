@@ -163,3 +163,19 @@ fn monte_carlo_propagates_worker_panic() {
         seed * 2
     });
 }
+
+// --- A5: monte_carlo::run accepts borrowing (non-'static) closures ---
+
+#[test]
+fn monte_carlo_accepts_borrowing_closure() {
+    // The scoped-thread backend must let the closure borrow caller-stack data
+    // (pre-A5 the `'static` bound forced moves/clones). This is primarily a
+    // compile-time proof; the assertions confirm the borrowed data was used.
+    let offsets: Vec<u64> = vec![100, 200, 300];
+    let results = simu::monte_carlo::run(0..3u64, |seed| {
+        // `offsets` is borrowed, not moved.
+        offsets[seed as usize] + seed
+    });
+    assert_eq!(results, vec![100, 201, 302]);
+    assert_eq!(offsets.len(), 3); // still usable after: proof it was borrowed
+}

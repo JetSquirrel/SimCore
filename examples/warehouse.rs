@@ -566,9 +566,17 @@ async fn truck_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
 
     // Drain every truck that arrived, with a hard deadline so the run always
     // terminates even if a putaway is repeatedly preempted near end-of-day.
+    // Only fold a *real* completion time into `day_cleared_at`: if the
+    // safety-net deadline arm wins, recording `now()` would report a sentinel
+    // (SIM_DURATION * 10) as if the floor had actually cleared.
     if !truck_futs.is_empty() {
+        let deadline_at = env.now() + SIM_DURATION * 10.0;
         let all = AllOf::new(truck_futs);
         any_of![all, env.timeout(SIM_DURATION * 10.0)].await;
+        if env.now() >= deadline_at {
+            ctx.emit(env.now(), "day_not_cleared", Some(("stream", 0)), &[]);
+            return;
+        }
     }
     {
         let mut s = ctx.stats.borrow_mut();
@@ -608,9 +616,16 @@ async fn order_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
         order_id += 1;
     }
 
+    // Same safety-net handling as truck_arrivals: don't report a sentinel
+    // deadline time as a real day-cleared time.
     if !order_futs.is_empty() {
+        let deadline_at = env.now() + SIM_DURATION * 10.0;
         let all = AllOf::new(order_futs);
         any_of![all, env.timeout(SIM_DURATION * 10.0)].await;
+        if env.now() >= deadline_at {
+            ctx.emit(env.now(), "day_not_cleared", Some(("stream", 1)), &[]);
+            return;
+        }
     }
     {
         let mut s = ctx.stats.borrow_mut();

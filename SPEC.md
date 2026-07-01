@@ -91,7 +91,7 @@ impl SimEnv {
     pub fn with_source<R: RandomSource + 'static>(source: R) -> Self;
 
     /// Reseed the active randomness source, restarting its stream.
-    pub fn set_seed(&self, seed: u64);
+    pub fn set_seed(&mut self, seed: u64);
 
     /// Return a cloneable handle for passing into processes.
     pub fn handle(&self) -> EnvHandle;
@@ -124,6 +124,8 @@ impl EnvHandle {
     pub fn now(&self) -> f64;
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
+    /// The deadline is fixed at creation (`now() + delay`). Panics if `delay`
+    /// is negative or non-finite (zero is allowed).
     pub fn timeout(&self, delay: f64) -> Timeout;
 
     /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
@@ -287,6 +289,11 @@ impl Resource {
 
     /// Total capacity.
     pub fn capacity(&self) -> usize;
+
+    /// Number of processes currently queued (excludes canceled requests).
+    /// `PriorityResource` and `PreemptiveResource` expose the same accessor;
+    /// `Container` exposes `get_queue_len()` / `put_queue_len()`.
+    pub fn queue_len(&self) -> usize;
 }
 ```
 
@@ -355,10 +362,12 @@ impl Container {
     pub fn level(&self) -> f64;
     pub fn capacity(&self) -> f64;
 
-    /// Add `amount`. Suspends if level + amount > capacity. Panics if amount <= 0.
+    /// Add `amount`. Suspends if level + amount > capacity.
+    /// Panics if amount <= 0 or amount > capacity (could never complete).
     pub fn put(&self, amount: f64) -> ContainerPutRequest;
 
-    /// Remove `amount`. Suspends if level < amount. Panics if amount <= 0.
+    /// Remove `amount`. Suspends if level < amount.
+    /// Panics if amount <= 0 or amount > capacity (could never complete).
     pub fn get(&self, amount: f64) -> ContainerGetRequest;
 }
 ```
@@ -446,8 +455,9 @@ let results = monte_carlo::run(0..10, |seed| {
 // results[i] corresponds to seed i
 ```
 
-`monte_carlo::run` collects results in seed order. By default it wraps the closure in an `Arc` and
-spawns one `std::thread` per seed; enabling the `monte-carlo` feature switches the backend to rayon's
+`monte_carlo::run` collects results in seed order. By default it spawns one *scoped* `std::thread`
+per seed (`std::thread::scope`), so the closure may borrow from the caller's stack — no `'static`
+bound and no `Arc` wrap; enabling the `monte-carlo` feature switches the backend to rayon's
 bounded work-stealing pool (preferable for hundreds/thousands of seeds, where one OS thread per seed
 is wasteful). The public contract — seed-ordered results and panic propagation — is identical either
 way. Because `SimEnv` is created *inside* each closure, it never crosses thread boundaries and its
@@ -479,7 +489,7 @@ The following patterns are shared across all suspendable primitives. They are
 implementation details but are documented because they are load-bearing for
 correctness.
 
-### Shared `WaitQueue` for wake-and-retry resources
+### Shared `WaitQueue` for the unit-pool resources (direct handoff)
 
 `Resource` and `PriorityResource` share a single internal helper,
 `resource::wait_queue::WaitQueue<K>` (`pub(crate)`), rather than each
@@ -610,7 +620,7 @@ distribution — see `compare/models/_feed.py` and `compare/README.md`.
 
 ## 5. MVP Feature Set
 
-**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (103 passing tests),
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (133 passing tests + 7 doc-tests),
 clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
@@ -633,7 +643,7 @@ clippy-clean (`-D warnings`), and benchmarked.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Test suite (103 unit + integration) | Done ✅     |
+| Test suite (unit + integration + doc-tests; see `TESTING.md`) | Done ✅     |
 | Pluggable `RandomSource` + portable `SplitMix64` feed | Done ✅ |
 | Criterion benchmark suite          | Done ✅     |
 
