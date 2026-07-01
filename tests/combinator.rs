@@ -1,5 +1,5 @@
-use simu::combinator::{AllOf, AnyOf};
-use simu::env::SimEnv;
+use simu::{AllOf, AnyOf};
+use simu::SimEnv;
 use simu::{all_of, any_of};
 
 // ---------------------------------------------------------------------------

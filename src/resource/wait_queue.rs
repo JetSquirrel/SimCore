@@ -101,6 +101,14 @@ impl<K: Ord> WaitQueue<K> {
         self.capacity
     }
 
+    /// Number of live (non-canceled) waiters currently parked in the queue.
+    ///
+    /// Canceled entries are excluded because they hold no claim on capacity and
+    /// are lazily discarded on the next `release`.
+    pub(crate) fn live_waiters(&self) -> usize {
+        self.waiters.iter().filter(|e| !e.canceled.get()).count()
+    }
+
     /// Take a genuinely free unit if capacity allows, returning whether it was
     /// granted.
     ///

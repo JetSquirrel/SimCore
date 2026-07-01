@@ -39,9 +39,11 @@ Outcome: a publishable, well-presented `0.1.0` crate that installs as
   - `keywords = ["simulation", "discrete-event", "des", "simpy", "monte-carlo"]` (max 5)
   - `categories = ["simulation", "science", "concurrency"]` (valid crates.io slugs)
   - `authors = ["Christoph Kuhmuench <christoph.kuhmuench@gmail.com>"]`
-  - `rust-version = "1.XX"` — pin a conservative MSRV (verify by building; the local
-    toolchain is nightly 1.96, so declare something safe like `1.75` and confirm
-    `cargo build` works, or run `cargo msrv` if available).
+  - `rust-version = "1.82"` — the code uses `Option::is_none_or` (`src/env.rs`),
+    stabilized in Rust 1.82 (Oct 2024), so the MSRV cannot be lower. 1.82 is well
+    over a year old, so this is a safe floor. Verify with `cargo +1.82 build` (or
+    `cargo msrv find`) before publishing; if a lower MSRV is ever wanted, replace
+    the single `is_none_or` call site with `map_or(true, …)`.
   - `exclude = ["compare/", "reviews/", ".github/", "target/", ".claude/", "PLAN.md", "TESTING.md", "CLAUDE.md", "PUBLISHING.md"]`
     — keeps the published tarball lean. **Critical: `compare/` alone is ~147 MB**
     (Python parity harness) and must not ship in the crate.

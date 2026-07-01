@@ -127,7 +127,7 @@ async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
         }
 
         let treatment   = env.rng().sample(treatment_dist);
-        let is_critical = env.rng().gen::<f64>() < CRITICAL_PROB;
+        let is_critical = env.rng().random::<f64>() < CRITICAL_PROB;
         let triage      = if is_critical { 0_u32 } else { 1_u32 };
 
         let handle = env.spawn(
@@ -141,13 +141,25 @@ async fn arrivals(env: EnvHandle, ctx: HospitalCtx) {
     // simulation always terminates even if some patients get stuck waiting
     // on a depleted blood bank (restocks stop after SIM_DURATION).
     if !patient_futs.is_empty() {
+        let deadline_at = env.now() + SIM_DURATION * 10.0;
         let all_patients = AllOf::new(patient_futs);
         any_of![all_patients, env.timeout(SIM_DURATION * 10.0)].await;
+
+        // Distinguish the two arms: if the safety-net deadline won, the ED did
+        // NOT actually clear, so recording `now()` would feed a meaningless
+        // sentinel into the summary. Only record a real clear time when the
+        // patients-joined arm won.
+        if env.now() < deadline_at {
+            ctx.stats.borrow_mut().ed_cleared_at = env.now();
+            ctx.log.borrow_mut().push(format!("[t={:5.1}] ED cleared", env.now()));
+        } else {
+            // Leave ed_cleared_at at its default (0.0) as a sentinel and flag it.
+            ctx.log.borrow_mut().push(format!(
+                "[t={:5.1}] ED did NOT clear (hit safety-net deadline; patients still stuck)",
+                env.now(),
+            ));
+        }
     }
-    ctx.stats.borrow_mut().ed_cleared_at = env.now();
-    ctx.log.borrow_mut().push(format!(
-        "[t={:5.1}] ED clear marker", env.now(),
-    ));
 }
 
 /// A single patient: triage nurse → blood draw → bed → treatment (possibly early-discharged).
@@ -188,6 +200,12 @@ async fn patient(
     }
 
     // --- Critical patients: evict the longest-admitted patient if beds are full ---
+    // Note: this eviction is best-effort, not a strict 1:1 pairing. If two
+    // critical patients reach this point in the same tick while beds are full,
+    // each fires the (then) oldest victim's trigger — so two evictions may be
+    // triggered for what becomes one freed bed. That is harmless here: the
+    // second evictee simply resolves its `any_of!` early and re-queues for a bed
+    // like anyone else. The companion `hospital.md` describes the common 1:1 case.
     if triage == 0 && ctx.beds.in_use() >= ctx.beds.capacity() {
         // BTreeMap iterates in ascending key (patient_id) order — lowest id first.
         let victim_id = ctx.eviction_map.borrow().keys().next().copied();

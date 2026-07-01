@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::RngCore;
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::Resource;
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -146,4 +146,20 @@ fn dropping_env_reclaims_suspended_processes() {
         weak.upgrade().is_none(),
         "suspended process leaked: SimState↔process cycle not broken on drop"
     );
+}
+
+// --- T4: monte_carlo::run must re-raise a worker panic on the caller ---
+// This runs against whichever backend is compiled (std::thread by default,
+// rayon under --features monte-carlo); the panic-propagation contract is
+// identical for both.
+
+#[test]
+#[should_panic(expected = "worker boom")]
+fn monte_carlo_propagates_worker_panic() {
+    let _ = simu::monte_carlo::run(0..8u64, |seed| {
+        if seed == 5 {
+            panic!("worker boom");
+        }
+        seed * 2
+    });
 }

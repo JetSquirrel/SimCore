@@ -30,6 +30,16 @@ pub struct ProcessHandle<T> {
     slot: Rc<RefCell<ProcessSlot<T>>>,
 }
 
+impl<T> std::fmt::Debug for ProcessHandle<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("ProcessHandle");
+        if let Ok(slot) = self.slot.try_borrow() {
+            d.field("ready", &slot.result.is_some());
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
 impl<T: 'static> Future for ProcessHandle<T> {
     type Output = T;
 

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::Container;
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -514,4 +514,29 @@ fn negative_capacity_panics() {
 #[should_panic(expected = "initial_level must not exceed capacity")]
 fn initial_level_exceeds_capacity_panics() {
     let _ = Container::new(5.0, 6.0);
+}
+
+// --- F5: over-capacity requests are programming errors (would block forever) ---
+
+#[test]
+#[should_panic(expected = "exceeds capacity")]
+fn put_exceeding_capacity_panics() {
+    let c = Container::new(10.0, 0.0);
+    let _req = c.put(11.0); // panics in put() before the future is built
+}
+
+#[test]
+#[should_panic(expected = "exceeds capacity")]
+fn get_exceeding_capacity_panics() {
+    let c = Container::new(10.0, 0.0);
+    let _req = c.get(11.0);
+}
+
+#[test]
+fn amount_equal_to_capacity_is_allowed() {
+    // Boundary: amount == capacity is satisfiable, must not panic.
+    let c = Container::new(10.0, 10.0);
+    let _req = c.get(10.0);
+    let c2 = Container::empty(10.0);
+    let _req2 = c2.put(10.0);
 }

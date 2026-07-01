@@ -22,7 +22,9 @@
 ///
 /// `F` is shared across threads, so it must be `Send + Sync`. A plain function
 /// pointer or a closure that captures only `Send + Sync` data satisfies this
-/// automatically.
+/// automatically. The closure need **not** be `'static`: the default backend
+/// uses [`std::thread::scope`], so `f` (and the results `R`) may borrow from the
+/// caller's stack.
 ///
 /// # Backend
 ///
@@ -39,8 +41,8 @@
 /// re-raise, so no threads are orphaned.
 pub fn run<F, R>(seeds: impl IntoIterator<Item = u64>, f: F) -> Vec<R>
 where
-    F: Fn(u64) -> R + Send + Sync + 'static,
-    R: Send + 'static,
+    F: Fn(u64) -> R + Send + Sync,
+    R: Send,
 {
     run_impl(seeds, f)
 }
@@ -53,8 +55,8 @@ where
 #[cfg(feature = "monte-carlo")]
 fn run_impl<F, R>(seeds: impl IntoIterator<Item = u64>, f: F) -> Vec<R>
 where
-    F: Fn(u64) -> R + Send + Sync + 'static,
-    R: Send + 'static,
+    F: Fn(u64) -> R + Send + Sync,
+    R: Send,
 {
     use rayon::prelude::*;
 
@@ -62,44 +64,47 @@ where
     seeds.into_par_iter().map(f).collect()
 }
 
-/// Default backend: one OS thread per seed.
+/// Default backend: one scoped OS thread per seed.
+///
+/// Uses [`std::thread::scope`] so `f` and the results can borrow from the
+/// caller — no `Arc` wrap and no `'static` bound. The scope joins every thread
+/// before returning, so no thread is orphaned even on panic.
 #[cfg(not(feature = "monte-carlo"))]
 fn run_impl<F, R>(seeds: impl IntoIterator<Item = u64>, f: F) -> Vec<R>
 where
-    F: Fn(u64) -> R + Send + Sync + 'static,
-    R: Send + 'static,
+    F: Fn(u64) -> R + Send + Sync,
+    R: Send,
 {
     use std::panic;
-    use std::sync::Arc;
     use std::thread;
 
-    let f = Arc::new(f);
+    let seeds: Vec<u64> = seeds.into_iter().collect();
+    let f = &f; // shared by reference across scoped threads (F: Sync ⇒ &F: Send)
 
-    let handles: Vec<_> = seeds
-        .into_iter()
-        .map(|seed| {
-            let f = Arc::clone(&f);
-            thread::spawn(move || f(seed))
-        })
-        .collect();
+    thread::scope(|scope| {
+        let handles: Vec<_> = seeds
+            .iter()
+            .map(|&seed| scope.spawn(move || f(seed)))
+            .collect();
 
-    // Join every thread first — even after we've seen a panic — so no thread
-    // is orphaned. Collect results and any panic payloads separately; if any
-    // thread panicked, re-raise the first payload on this thread.
-    let mut results = Vec::with_capacity(handles.len());
-    let mut first_panic = None;
-    for h in handles {
-        match h.join() {
-            Ok(r) => results.push(r),
-            Err(payload) => {
-                if first_panic.is_none() {
-                    first_panic = Some(payload);
+        // Join every thread first — even after we've seen a panic — so no thread
+        // is orphaned. Collect results and any panic payloads separately; if any
+        // thread panicked, re-raise the first payload on this thread.
+        let mut results = Vec::with_capacity(handles.len());
+        let mut first_panic = None;
+        for h in handles {
+            match h.join() {
+                Ok(r) => results.push(r),
+                Err(payload) => {
+                    if first_panic.is_none() {
+                        first_panic = Some(payload);
+                    }
                 }
             }
         }
-    }
-    if let Some(payload) = first_panic {
-        panic::resume_unwind(payload);
-    }
-    results
+        if let Some(payload) = first_panic {
+            panic::resume_unwind(payload);
+        }
+        results
+    })
 }

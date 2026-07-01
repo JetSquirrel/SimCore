@@ -32,6 +32,46 @@ freezes the public API**.
 
 ---
 
+## Resolution log — 2026-07-01 (Opus 4.8, batch after F1)
+
+All findings below were addressed in one pass on branch `fix/review-2026-07-01`,
+following the recommended execution order. Gate after the batch: **132 tests + 7
+doc-tests green** on both the default and `--features monte-carlo` builds, clippy
+clean (`--all-targets -D warnings`) on both, all three examples run, benches
+build, and the exact-mode `compare` models stay deterministic.
+
+| Finding | Status | Note |
+|---------|--------|------|
+| F1 | **FIXED (verified)** | Direct handoff; verified by Fable 5. |
+| F2 | **FIXED** | `run_until` clamps `until.max(now)`; tests + doc. |
+| F3 | **FIXED** | `timeout` panics on negative/NaN/∞; `debug_assert` in `schedule_wakeup`; tests + doc. |
+| F4 | **FIXED** | `ScheduledWaker::Ord` now uses `f64::total_cmp`. |
+| F5 | **FIXED** | `Container::put`/`get` panic on `amount > capacity`; tests + doc. |
+| F6 | **FIXED (docs)** | Unfired-`EventTrigger`-drop semantics documented; regression test added. |
+| A1 | **FIXED** | Crate-level `//!` docs + compiling quick-start; `#![warn(missing_docs)]` (no gaps). |
+| A2 | **FIXED** | Modules `env`/`event`/`timeout`/`process`/`combinator`/`resource` are now private; only the curated root surface + `rng`/`monte_carlo` are public; macros use `$crate::AnyOf`/`AllOf`. |
+| A3 | **FIXED** | All four `ignore` doc-tests converted to compiling doc-tests (0 ignored). |
+| A4 | **DONE (rand 0.9)** | 0.10 deferred (larger reorg); see the A4 section. |
+| A5 | **FIXED** | `monte_carlo::run` uses `thread::scope`; dropped `'static` + `Arc`. |
+| A6 | **FIXED** | `queue_len()` on the three pools; `get_queue_len`/`put_queue_len` on `Container`. |
+| A7 | **FIXED** | `Debug` on all public types; `set_seed(&mut self)`; `Timeout` deadline-at-creation documented; `Priority` newtype left ACK. |
+| P1 | **FIXED** | One cached `Waker` per process (created at admission); `will_wake` dedup now effective. |
+| P2 | **FIXED** | Process table is `Vec<Option<ProcessEntry>>` indexed by dense id; O(1) take/put-back, no hashing. |
+| P3 | **FIXED (comment)** | Stale-id poll documented as benign in `poll_ready`. |
+| D1 | **FIXED** | SPEC §2 (naming) and §9 (out-of-scope) reconciled with shipped state. |
+| D2 | **FIXED** | TESTING.md `VecDeque` rot removed; coverage table replaced with a regen command; counts/benches refreshed. |
+| D3 | **FIXED** | README import path, license, and install snippet updated. |
+| D4 | **FIXED** | PUBLISHING.md MSRV corrected to 1.82 (`Option::is_none_or`). |
+| D5 | **FIXED** | Behaviour notes landed with F2/F3/F5/F6 and in API.md. |
+| T1 | **FIXED** | `tests/same_tick_races.rs` (from F1). |
+| T2 | **FIXED** | `tests/adversarial_scheduling.rs` — same-batch double-release, preempt-during-batch, mixed container. |
+| T3 | **FIXED** | `priority_contention`/`preemptive_contention`/`container_throughput` bench groups. |
+| T4 | **FIXED** | `monte_carlo_propagates_worker_panic` (both backends). |
+| E1 | **FIXED** | `hospital` distinguishes the safety-net-deadline arm from a real ED clear. |
+| E2 | **PARTIAL** | Eviction comment + `compare.rs` in CLAUDE.md done; shared `log_dir` extraction left (cosmetic). |
+
+---
+
 # Part 1 — Correctness (implementation)
 
 ## F1. Woken waiter stranded forever when it loses the same-batch acquire race — **FIXED (verified)**
@@ -306,7 +346,18 @@ example into compiling doc-tests (wrap in a spawned process; hidden `#` setup li
 short). The `preemptive.rs` module example is long — acceptable to leave as `ignore`, but at least
 convert it to `no_run` + make it compile, so type drift is caught.
 
-## A4. `rand 0.8` / `rand_distr 0.4` are one major version behind — decide before publishing — **OPEN**
+## A4. `rand 0.8` / `rand_distr 0.4` are one major version behind — decide before publishing — **DONE (rand 0.9; 0.10 deferred)**
+
+> **2026-07-01 (Opus 4.8):** Upgraded to `rand 0.9` / `rand_distr 0.5` per the
+> documented migration below: dropped `try_fill_bytes`/`rand::Error` from the
+> `RngCore` impls (now blanket-provided via `TryRngCore`), `from_entropy` →
+> `from_os_rng`, `gen::<f64>()` → `random::<f64>()` in the examples, and updated
+> the `rng_guard_covers_all_rngcore_methods` test. SplitMix64 known-answer
+> vectors are unchanged (pure integer code), so exact-mode SimPy parity is
+> preserved. `rand 0.10`/`rand_distr 0.6` are also out but restructure the crate
+> (e.g. `RngCore` is no longer re-exported from `rand`), a larger migration than
+> analyzed here — **deferred**; revisit before/at 1.0. Suite green, clippy clean
+> on both feature sets.
 
 **Severity: MEDIUM (strategic).** Files: `Cargo.toml`, `src/rng.rs`, `src/env.rs`, examples.
 **Model: Opus** (public-trait surface: `RandomSource: RngCore` leaks the rand version).

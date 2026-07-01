@@ -35,8 +35,13 @@ env.spawn(future)  -> ProcessHandle<T>   // spawn a root process
 env.timeout(delay) -> Timeout            // await to pause for `delay` time units
 env.event()        -> (EventTrigger, EventAwaitable)
 env.run()                                // run until no more events
-env.run_until(t)                         // run until simulated time reaches t
+env.run_until(t)                         // run until simulated time reaches t (monotonic: never rewinds)
 ```
+
+`run_until(t)` advances the clock *to* `t` when the queue empties early, but never
+backwards — a boundary at or before `now()` is a no-op. `timeout(delay)` **panics**
+if `delay` is negative or non-finite (zero is allowed); its deadline is fixed at
+creation time (`now() + delay`), not when first awaited.
 
 `SimEnv` is `!Send + !Sync`. For Monte Carlo, spin up independent instances per OS thread.
 
@@ -80,6 +85,8 @@ trigger.fire();                   // wakes all current and future awaiters (once
 - `EventAwaitable: Clone` — share with multiple processes.
 - Fire-before-await latch: awaiting after `fire()` resolves immediately.
 - `EventTrigger` can only be fired once (consumes self).
+- Dropping an `EventTrigger` **without** firing strands its waiters: they suspend
+  forever (until the run ends). Race against a `timeout` if that is not acceptable.
 
 ---
 
@@ -92,8 +99,9 @@ use simu::Resource;
 
 let r = Resource::new(capacity);   // panics if capacity == 0; Clone — all clones share pool
 
-r.capacity() -> usize
-r.in_use()   -> usize
+r.capacity()  -> usize
+r.in_use()    -> usize
+r.queue_len() -> usize             // processes currently waiting (excludes canceled)
 
 let guard = r.request().await;     // suspends until a unit is free → ResourceGuard
 // unit released automatically when guard is dropped
@@ -175,9 +183,16 @@ c.capacity() -> f64
 c.level()    -> f64
 c.put(amount: f64) -> ContainerPutRequest   // await; suspends if level + amount > capacity
 c.get(amount: f64) -> ContainerGetRequest   // await; suspends if level < amount
+c.get_queue_len()  -> usize                 // blocked consumers (excludes canceled)
+c.put_queue_len()  -> usize                 // blocked producers (excludes canceled)
 ```
 
-`Container: Clone` — all clones share the same internal state.
+`PriorityResource` and `PreemptiveResource` also expose `queue_len()` (waiters
+across all priority levels / currently-blocked requests respectively).
+
+`Container: Clone` — all clones share the same internal state. `put`/`get` **panic**
+if `amount <= 0` or `amount > capacity` (an over-capacity request could never
+complete and would block the whole FIFO queue behind it).
 
 ---
 
@@ -277,6 +292,6 @@ feed.set_seed(seed: u64)                   // restart the stream
 | `!Send + !Sync` | `SimEnv`, `Resource`, `Container` etc. cannot cross thread boundaries; use `monte_carlo::run` for parallelism |
 | RNG borrow | `handle.rng()` returns a short-lived guard — sample immediately, do not hold across `.await` |
 | RAII guards | `ResourceGuard` / `PriorityResourceGuard` / `PreemptiveGuard` release their unit on drop; drop early to free sooner (a *preempted* `PreemptiveGuard` drop is a no-op) |
-| Cancelled requests | Dropping a `request().await` future mid-suspension removes it from the queue |
+| Cancelled requests | Dropping a `request().await` future mid-suspension marks its queue entry canceled; the entry is skipped on the next release and removed lazily (not eagerly) |
 | Determinism | Same seed + same logic → identical event sequence every run |
 | Panics | Programming misuse (wrong capacity, empty combinator, etc.) panics; don't catch them |

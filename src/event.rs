@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
+#[derive(Debug)]
 struct EventState {
     fired: bool,
     waiters: Vec<Waker>,
@@ -12,6 +13,16 @@ struct EventState {
 /// The sending half of a manual event. Call [`fire`](EventTrigger::fire) to
 /// wake all processes currently waiting on the paired [`EventAwaitable`], and
 /// to make any *future* awaits on that same awaitable resolve immediately.
+///
+/// **Dropping a trigger without firing it strands its waiters.** If an
+/// `EventTrigger` is dropped without `fire()` being called, the event never
+/// fires: any process currently awaiting the paired `EventAwaitable` — and any
+/// that awaits it later — will suspend forever (until the run ends and
+/// [`SimEnv`](crate::SimEnv)'s `Drop` reclaims the suspended processes). This is
+/// a normal discrete-event outcome (a signal that simply never arrives), not a
+/// panic; if a process must not block indefinitely, race the awaitable against a
+/// [`timeout`](crate::EnvHandle::timeout) via [`any_of!`](crate::any_of).
+#[derive(Debug)]
 pub struct EventTrigger {
     state: Rc<RefCell<EventState>>,
 }
@@ -24,7 +35,7 @@ pub struct EventTrigger {
 ///
 /// `EventAwaitable` is `Clone`: every clone shares the same underlying event,
 /// so multiple processes can await the same trigger.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct EventAwaitable {
     state: Rc<RefCell<EventState>>,
 }

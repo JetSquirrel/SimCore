@@ -32,6 +32,18 @@ pub struct Resource {
     state: Rc<RefCell<WaitQueue<()>>>,
 }
 
+impl std::fmt::Debug for Resource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Resource");
+        if let Ok(q) = self.state.try_borrow() {
+            d.field("in_use", &q.in_use())
+                .field("capacity", &q.capacity())
+                .field("queue_len", &q.live_waiters());
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
 impl Resource {
     /// Create a new resource pool with the given capacity.
     ///
@@ -71,6 +83,13 @@ impl Resource {
     pub fn capacity(&self) -> usize {
         self.state.borrow().capacity()
     }
+
+    /// Number of processes currently queued waiting for a unit (SimPy's
+    /// `len(resource.queue)`). Excludes abandoned (canceled) requests.
+    #[must_use]
+    pub fn queue_len(&self) -> usize {
+        self.state.borrow().live_waiters()
+    }
 }
 
 /// Future returned by [`Resource::request`].
@@ -91,6 +110,15 @@ pub struct ResourceRequest {
     /// Shared with the queue entry; set to `true` by `WaitQueue::release` when
     /// the unit is handed directly to this request. Checked first in `poll`.
     granted: Rc<Cell<bool>>,
+}
+
+impl std::fmt::Debug for ResourceRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceRequest")
+            .field("registered", &self.registered)
+            .field("granted", &self.granted.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Future for ResourceRequest {
@@ -155,6 +183,12 @@ impl Drop for ResourceRequest {
 /// next suspended requester (if any) in FIFO order.
 pub struct ResourceGuard {
     state: Rc<RefCell<WaitQueue<()>>>,
+}
+
+impl std::fmt::Debug for ResourceGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceGuard").finish_non_exhaustive()
+    }
 }
 
 impl Drop for ResourceGuard {

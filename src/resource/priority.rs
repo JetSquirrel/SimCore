@@ -33,6 +33,18 @@ pub struct PriorityResource {
     state: Rc<RefCell<WaitQueue<u32>>>,
 }
 
+impl std::fmt::Debug for PriorityResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("PriorityResource");
+        if let Ok(q) = self.state.try_borrow() {
+            d.field("in_use", &q.in_use())
+                .field("capacity", &q.capacity())
+                .field("queue_len", &q.live_waiters());
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
 impl PriorityResource {
     /// Create a new priority resource pool with the given capacity.
     ///
@@ -77,6 +89,13 @@ impl PriorityResource {
     pub fn capacity(&self) -> usize {
         self.state.borrow().capacity()
     }
+
+    /// Number of processes currently queued waiting for a unit, across all
+    /// priority levels. Excludes abandoned (canceled) requests.
+    #[must_use]
+    pub fn queue_len(&self) -> usize {
+        self.state.borrow().live_waiters()
+    }
 }
 
 /// Future returned by [`PriorityResource::request`].
@@ -96,6 +115,16 @@ pub struct PriorityResourceRequest {
     /// Shared with the queue entry; set to `true` by `WaitQueue::release` when
     /// the unit is handed directly to this request. Checked first in `poll`.
     granted: Rc<Cell<bool>>,
+}
+
+impl std::fmt::Debug for PriorityResourceRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PriorityResourceRequest")
+            .field("priority", &self.priority)
+            .field("registered", &self.registered)
+            .field("granted", &self.granted.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Future for PriorityResourceRequest {
@@ -157,6 +186,13 @@ impl Drop for PriorityResourceRequest {
 /// highest-priority suspended requester (if any).
 pub struct PriorityResourceGuard {
     state: Rc<RefCell<WaitQueue<u32>>>,
+}
+
+impl std::fmt::Debug for PriorityResourceGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PriorityResourceGuard")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for PriorityResourceGuard {

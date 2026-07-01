@@ -9,6 +9,7 @@ use crate::env::EnvHandle;
 /// On first poll it registers a wakeup in the event queue and returns
 /// `Pending`. The executor wakes it when the event fires, and the next
 /// poll returns `Ready`.
+#[derive(Debug)]
 pub struct Timeout {
     deadline: f64,
     scheduled: bool,

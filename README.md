@@ -19,8 +19,7 @@ For test strategy, coverage, and benchmark groups — see [TESTING.md](TESTING.m
 ## Quick start
 
 ```rust
-use simu::env::SimEnv;
-use simu::Resource;
+use simu::{SimEnv, Resource};
 
 let mut env = SimEnv::with_seed(42);
 let machine = Resource::new(1);
@@ -40,11 +39,15 @@ env.run();  // prints: job 1 done at 2, job 2 done at 4, job 3 done at 6
 
 ## Usage
 
-Add `simu` to your `Cargo.toml`:
+Add `simu` to your `Cargo.toml`. Until the crate is published it is a path (or git)
+dependency; once released on crates.io the package is named `simu-des` (the `simu`
+name was taken) while the import path stays `use simu::…`:
 
 ```toml
 [dependencies]
 simu = { path = "." }
+# after publication:
+# simu-des = "0.1"   # still `use simu::...` in code
 ```
 
 `monte_carlo::run` works out of the box (one `std::thread` per seed). For large seed counts, enable
@@ -165,4 +168,6 @@ divergence the harness originally surfaced is now fixed.
 
 ## License
 
-TBD
+Dual-licensed under **MIT OR Apache-2.0** (the Rust ecosystem convention). The
+`LICENSE-MIT` / `LICENSE-APACHE` files are added at publication — see
+[PUBLISHING.md](PUBLISHING.md).

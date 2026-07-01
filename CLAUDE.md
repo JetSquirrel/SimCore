@@ -57,10 +57,11 @@ simu/
 ├── examples/
 │   ├── hospital.rs  / hospital.md
 │   ├── brewery.rs   / brewery.md
-│   └── warehouse.rs / warehouse.md
+│   ├── warehouse.rs / warehouse.md
+│   └── compare.rs        # SimPy-parity harness runner (JSON contract; not a showcase — see compare/)
 ├── benches/
 │   └── simulation.rs     # Criterion benchmarks
-└── tests/                # 11 integration files: timeout, event, resource, priority_resource,
+└── tests/                # integration files: timeout, event, resource, priority_resource,
                           # container, combinator, process_handle, dropped_awaitable, system,
                           # external_feed, …
 ```

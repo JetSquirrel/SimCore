@@ -11,7 +11,10 @@ interact through shared resources and events.
 
 ## 2. Crate Naming
 
-The library crate name is `simu`: short, implies simulation, and likely unclaimed on crates.io.
+The library is imported as `simu` (`use simu::…`). The crates.io **package** name
+`simu` is already taken (an unrelated iOS-simulator CLI), so the crate publishes as
+**`simu-des`** while keeping `[lib] name = "simu"` — users add `simu-des = "0.1"`
+and still write `use simu::…`. See `PUBLISHING.md` for the full release plan.
 
 ---
 
@@ -810,6 +813,12 @@ No async runtime dependency (tokio, async-std) — the custom executor is self-c
 
 ## 9. Out of Scope for MVP
 
+**Delivered since this list was written** (no longer out of scope): `Container`
+(§4.5) and preemption via `PreemptiveResource` (§4.5) — cooperative-at-yield, the
+DES-idiomatic form of a process interrupt.
+
+Still out of scope:
+
 - Real-time synchronisation.
 - Networked / distributed simulation.
 - GUI or visualisation.
@@ -817,5 +826,7 @@ No async runtime dependency (tokio, async-std) — the custom executor is self-c
 - GPU acceleration.
 - Event recording and replay (seeded determinism already makes replay redundant;
   re-running with the same seed reproduces the run bit-for-bit).
-- Process interrupts and preemption.
-- `Container`, `Store`, `FilterStore` resource types.
+- `Store` / `FilterStore` discrete-item queues.
+- A forcible `Interrupt` primitive targeting an arbitrary suspended process (the
+  cooperative-at-yield `PreemptiveResource` covers the common preemption case;
+  see §6).

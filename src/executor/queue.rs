@@ -27,9 +27,14 @@ impl PartialOrd for ScheduledWaker {
 
 impl Ord for ScheduledWaker {
     fn cmp(&self, other: &Self) -> Ordering {
+        // `total_cmp` is a genuine total order over all f64 values, so the
+        // `BinaryHeap` invariant holds unconditionally. Scheduled times are
+        // guaranteed finite and non-negative by `EnvHandle::timeout` /
+        // `schedule_wakeup`, so the NaN/±inf corners of `total_cmp` are never
+        // exercised in practice — but relying on a total order rather than
+        // `partial_cmp(..).unwrap_or(Equal)` keeps the heap sound by construction.
         self.time
-            .partial_cmp(&other.time)
-            .unwrap_or(Ordering::Equal)
+            .total_cmp(&other.time)
             .then(self.seq.cmp(&other.seq))
     }
 }

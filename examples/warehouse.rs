@@ -601,7 +601,7 @@ async fn order_arrivals(env: EnvHandle, ctx: WarehouseCtx) {
             break;
         }
 
-        let expedite = env.rng().gen::<f64>() < EXPEDITE_PROB;
+        let expedite = env.rng().random::<f64>() < EXPEDITE_PROB;
         ctx.stats.borrow_mut().orders += 1;
         let handle = env.spawn(order_fulfillment(env.clone(), order_id, expedite, ctx.clone()));
         order_futs.push(Box::pin(handle.discard()));
