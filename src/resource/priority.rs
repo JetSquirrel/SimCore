@@ -60,7 +60,9 @@ impl PriorityResource {
             state: Rc::clone(&self.state),
             priority,
             registered: false,
+            consumed: false,
             canceled: Rc::new(Cell::new(false)),
+            granted: Rc::new(Cell::new(false)),
         }
     }
 
@@ -85,26 +87,50 @@ pub struct PriorityResourceRequest {
     priority: u32,
     /// Prevents double-queuing on repeated polls (same pattern as `ResourceRequest`).
     registered: bool,
+    /// Set once a granted/acquired unit has become a guard; `Drop` then must
+    /// not release (the guard owns the unit).
+    consumed: bool,
     /// Shared with the queue entry; set to `true` on drop if the request was
     /// registered but never granted.
     canceled: Rc<Cell<bool>>,
+    /// Shared with the queue entry; set to `true` by `WaitQueue::release` when
+    /// the unit is handed directly to this request. Checked first in `poll`.
+    granted: Rc<Cell<bool>>,
 }
 
 impl Future for PriorityResourceRequest {
     type Output = PriorityResourceGuard;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<PriorityResourceGuard> {
+        // Direct handoff: a released unit was transferred to us (see `Resource`).
+        if self.granted.get() {
+            self.consumed = true;
+            return Poll::Ready(PriorityResourceGuard {
+                state: Rc::clone(&self.state),
+            });
+        }
         // Drop the borrow before writing self.registered to satisfy the borrow checker.
-        {
+        let acquired = {
             let mut state = self.state.borrow_mut();
             if state.try_acquire() {
-                return Poll::Ready(PriorityResourceGuard {
-                    state: Rc::clone(&self.state),
-                });
+                true
+            } else {
+                if !self.registered {
+                    state.register(
+                        self.priority,
+                        cx.waker().clone(),
+                        Rc::clone(&self.canceled),
+                        Rc::clone(&self.granted),
+                    );
+                }
+                false
             }
-            if !self.registered {
-                state.register(self.priority, cx.waker().clone(), Rc::clone(&self.canceled));
-            }
+        };
+        if acquired {
+            self.consumed = true;
+            return Poll::Ready(PriorityResourceGuard {
+                state: Rc::clone(&self.state),
+            });
         }
         self.registered = true;
         Poll::Pending
@@ -113,7 +139,13 @@ impl Future for PriorityResourceRequest {
 
 impl Drop for PriorityResourceRequest {
     fn drop(&mut self) {
-        if self.registered {
+        if self.consumed {
+            return; // the guard owns the unit and will release it
+        }
+        if self.granted.get() {
+            // Handed a unit but never consumed it — pass it on (see `Resource`).
+            self.state.borrow_mut().release();
+        } else if self.registered {
             self.canceled.set(true);
         }
     }

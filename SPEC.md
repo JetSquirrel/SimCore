@@ -488,10 +488,25 @@ ascending `(key, seq)` order, so:
 - `Resource` is `WaitQueue<()>` — every key is equal, giving pure FIFO.
 - `PriorityResource` is `WaitQueue<u32>` — lower key first, FIFO within a level.
 
-This keeps the `registered` / `canceled` / release-skip logic in one place (and
-gives `PreemptiveResource` its capacity/queue base). `Container` keeps its
+This keeps the `registered` / `canceled` / `granted` / release logic in one place
+(and gives `PreemptiveResource` its capacity/queue base). `Container` keeps its
 own two-sided amount-based cascade — its commit-at-wake model does not fit the
-wake-and-retry shape — see `trigger_cascade` below.
+same shape — see `trigger_cascade` below.
+
+**Direct handoff (commit-at-wake).** `release` does **not** mark the unit free and
+let woken waiters race for it. Instead it *transfers* the unit: it pops the next
+live waiter, sets that waiter's `granted` flag, wakes it, and leaves `in_use`
+unchanged — the unit is never observably free, so it cannot be `try_acquire`d out
+from under the woken waiter by a fresh request polled in the same ready batch.
+`in_use` drops only when `release` finds no live waiter. Correspondingly,
+`try_acquire` is used only for a request's *initial* attempt; a woken waiter
+returns via its `granted` flag, never by re-acquiring. This closes a
+same-ready-batch stranding deadlock and the FIFO/priority violation it caused —
+see `reviews/2026-07-01-implementation-review.md` (Finding 1). A request that is
+granted but dropped before it re-polls (e.g. a losing `any_of!` arm) calls
+`release` from its `Drop` so the handed-off unit is passed on rather than leaked;
+a request that has turned its grant into a guard records that (`consumed`) so its
+`Drop` does not double-release.
 
 ### `registered` flag
 

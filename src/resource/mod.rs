@@ -54,7 +54,9 @@ impl Resource {
         ResourceRequest {
             state: Rc::clone(&self.state),
             registered: false,
+            consumed: false,
             canceled: Rc::new(Cell::new(false)),
+            granted: Rc::new(Cell::new(false)),
         }
     }
 
@@ -79,26 +81,52 @@ pub struct ResourceRequest {
     /// Whether this request has already been enqueued in the wait queue.
     /// Prevents double-queuing on repeated polls.
     registered: bool,
+    /// Set once this request has turned a granted/acquired unit into a
+    /// `ResourceGuard`. Once consumed, `Drop` must not release: the guard owns
+    /// the unit and will release it itself.
+    consumed: bool,
     /// Shared with the queue entry; set to `true` on drop if the request was
     /// registered but never granted, so the release loop skips it.
     canceled: Rc<Cell<bool>>,
+    /// Shared with the queue entry; set to `true` by `WaitQueue::release` when
+    /// the unit is handed directly to this request. Checked first in `poll`.
+    granted: Rc<Cell<bool>>,
 }
 
 impl Future for ResourceRequest {
     type Output = ResourceGuard;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<ResourceGuard> {
+        // Direct handoff: a released unit was transferred to us. Take it without
+        // touching capacity — `in_use` already accounts for this unit.
+        if self.granted.get() {
+            self.consumed = true;
+            return Poll::Ready(ResourceGuard {
+                state: Rc::clone(&self.state),
+            });
+        }
         // Drop the borrow before writing self.registered to satisfy the borrow checker.
-        {
+        let acquired = {
             let mut state = self.state.borrow_mut();
             if state.try_acquire() {
-                return Poll::Ready(ResourceGuard {
-                    state: Rc::clone(&self.state),
-                });
+                true
+            } else {
+                if !self.registered {
+                    state.register(
+                        (),
+                        cx.waker().clone(),
+                        Rc::clone(&self.canceled),
+                        Rc::clone(&self.granted),
+                    );
+                }
+                false
             }
-            if !self.registered {
-                state.register((), cx.waker().clone(), Rc::clone(&self.canceled));
-            }
+        };
+        if acquired {
+            self.consumed = true;
+            return Poll::Ready(ResourceGuard {
+                state: Rc::clone(&self.state),
+            });
         }
         self.registered = true;
         Poll::Pending
@@ -107,7 +135,15 @@ impl Future for ResourceRequest {
 
 impl Drop for ResourceRequest {
     fn drop(&mut self) {
-        if self.registered {
+        if self.consumed {
+            return; // the guard owns the unit and will release it
+        }
+        if self.granted.get() {
+            // A unit was handed to us but never turned into a guard (e.g. the
+            // future was dropped before its re-poll). Pass it straight on to
+            // the next waiter so it is not leaked.
+            self.state.borrow_mut().release();
+        } else if self.registered {
             self.canceled.set(true);
         }
     }

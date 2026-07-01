@@ -32,6 +32,13 @@ struct Entry<K> {
     /// when abandoned before being granted; [`WaitQueue::release`] skips such
     /// entries so live waiters behind them are still served.
     canceled: Rc<Cell<bool>>,
+    /// Shared with the owning request future. [`WaitQueue::release`] sets this
+    /// to `true` when it hands the unit *directly* to this waiter, so the
+    /// waiter's next poll returns `Ready` without re-checking capacity — the
+    /// unit is never observably free, so no later request can steal it. This is
+    /// the commit-at-wake half of the direct-handoff protocol (mirrors
+    /// `Container`'s `done` flag).
+    granted: Rc<Cell<bool>>,
 }
 
 // `BinaryHeap` is a max-heap, but we want the *smallest* `(key, seq)` served
@@ -94,13 +101,18 @@ impl<K: Ord> WaitQueue<K> {
         self.capacity
     }
 
-    /// Take a free unit if one is available, returning whether it was granted.
+    /// Take a genuinely free unit if capacity allows, returning whether it was
+    /// granted.
     ///
-    /// This is called at the top of every request poll — including re-polls of
-    /// an already-registered waiter — so a woken waiter acquires the unit that
-    /// [`release`](WaitQueue::release) freed for it. Because `release` wakes
-    /// only the single next-in-line waiter, the unconditional grab here cannot
-    /// jump the queue.
+    /// Called only for a request's *initial* attempt (a fresh, not-yet-parked
+    /// requester). A woken waiter does **not** come back through here — it is
+    /// handed its unit directly by [`release`](WaitQueue::release) and returns
+    /// via its `granted` flag. Because `release` transfers the unit without ever
+    /// decrementing `in_use` while any live waiter is queued, a fresh requester
+    /// polled between a release and the woken waiter's re-poll always finds
+    /// `in_use == capacity` here and correctly queues *behind* the waiter — this
+    /// is what preserves FIFO/priority and prevents the woken waiter from being
+    /// stranded (see `reviews/2026-07-01-implementation-review.md`, Finding 1).
     pub(crate) fn try_acquire(&mut self) -> bool {
         if self.in_use < self.capacity {
             self.in_use += 1;
@@ -112,7 +124,13 @@ impl<K: Ord> WaitQueue<K> {
 
     /// Park a waiter in the queue. Call only once per request (guarded by the
     /// request's `registered` flag) to avoid double-queuing across polls.
-    pub(crate) fn register(&mut self, key: K, waker: Waker, canceled: Rc<Cell<bool>>) {
+    pub(crate) fn register(
+        &mut self,
+        key: K,
+        waker: Waker,
+        canceled: Rc<Cell<bool>>,
+        granted: Rc<Cell<bool>>,
+    ) {
         let seq = self.next_seq;
         self.next_seq += 1;
         self.waiters.push(Entry {
@@ -120,22 +138,33 @@ impl<K: Ord> WaitQueue<K> {
             seq,
             waker,
             canceled,
+            granted,
         });
     }
 
-    /// Release one held unit and wake the next live waiter, if any.
+    /// Release one held unit, handing it **directly** to the next live waiter
+    /// if there is one.
+    ///
+    /// Rather than marking the unit free (decrementing `in_use`) and letting the
+    /// woken waiter race for it, the unit is *transferred*: the next live waiter
+    /// in priority/FIFO order has its `granted` flag set and is woken, and
+    /// `in_use` is left unchanged — the unit is never observably free, so a
+    /// fresh request cannot `try_acquire` it out from under the woken waiter.
+    /// Only when no live waiter wants the unit does `in_use` actually drop.
     ///
     /// Canceled entries (abandoned requests) are popped and discarded without
-    /// waking, so the first *live* waiter in priority/FIFO order is the one
-    /// resumed — no starvation behind a dead entry.
+    /// being granted, so the first *live* waiter is the one served — no
+    /// starvation behind a dead entry.
     pub(crate) fn release(&mut self) {
-        self.in_use -= 1;
         while let Some(entry) = self.waiters.pop() {
             if !entry.canceled.get() {
+                entry.granted.set(true);
                 entry.waker.wake();
-                return;
+                return; // unit transferred; `in_use` deliberately unchanged
             }
         }
+        // No live waiter: the unit truly frees.
+        self.in_use -= 1;
     }
 }
 
@@ -176,6 +205,21 @@ mod tests {
         Rc::new(Cell::new(false))
     }
 
+    /// Register a waiter and return its `(slot, canceled, granted)` handles so a
+    /// test can observe both the wake order and the direct-handoff `granted`
+    /// flag. The waiter starts live (neither canceled nor granted).
+    fn register_waiter<K: Ord>(
+        q: &mut WaitQueue<K>,
+        key: K,
+        order: &Arc<AtomicUsize>,
+    ) -> (Arc<AtomicUsize>, Rc<Cell<bool>>) {
+        let (waker, slot) = recording(order);
+        let canceled = live();
+        let granted = live();
+        q.register(key, waker, Rc::clone(&canceled), Rc::clone(&granted));
+        (slot, granted)
+    }
+
     #[test]
     fn try_acquire_respects_capacity() {
         let mut q: WaitQueue<()> = WaitQueue::new(2);
@@ -184,9 +228,28 @@ mod tests {
         assert!(!q.try_acquire()); // capacity exhausted
         assert_eq!(q.in_use(), 2);
         assert_eq!(q.capacity(), 2);
+        // No waiters queued: release genuinely frees the unit.
         q.release();
         assert_eq!(q.in_use(), 1);
         assert!(q.try_acquire());
+    }
+
+    #[test]
+    fn release_hands_off_directly_without_freeing_the_unit() {
+        // The core of the F1 fix: while a live waiter is queued, release
+        // transfers the unit to it (setting `granted`) and leaves `in_use`
+        // pinned at capacity, so a concurrent `try_acquire` cannot steal it.
+        let mut q: WaitQueue<()> = WaitQueue::new(1);
+        assert!(q.try_acquire());
+
+        let order = Arc::new(AtomicUsize::new(0));
+        let (s0, g0) = register_waiter(&mut q, (), &order);
+
+        q.release();
+        assert!(g0.get(), "unit must be handed directly to the waiter");
+        assert_eq!(s0.load(AtomicOrdering::SeqCst), 1, "waiter must be woken");
+        assert_eq!(q.in_use(), 1, "unit must stay in use — never observably free");
+        assert!(!q.try_acquire(), "a fresh request must not be able to steal it");
     }
 
     #[test]
@@ -195,21 +258,25 @@ mod tests {
         assert!(q.try_acquire());
 
         let order = Arc::new(AtomicUsize::new(0));
-        let (w0, s0) = recording(&order);
-        let (w1, s1) = recording(&order);
-        let (w2, s2) = recording(&order);
-        q.register((), w0, live());
-        q.register((), w1, live());
-        q.register((), w2, live());
+        let (s0, g0) = register_waiter(&mut q, (), &order);
+        let (s1, g1) = register_waiter(&mut q, (), &order);
+        let (s2, g2) = register_waiter(&mut q, (), &order);
 
-        // Each release wakes exactly one waiter, in insertion order; the woken
-        // waiter then re-acquires the freed unit (the wake-and-retry handshake).
+        // Each release hands the unit directly to the next waiter, in insertion
+        // order. `in_use` stays at 1 throughout (the unit is transferred, never
+        // freed) until the last waiter releases with an empty queue.
         q.release();
-        assert!(q.try_acquire());
+        assert!(g0.get() && !g1.get() && !g2.get());
+        assert_eq!(q.in_use(), 1);
         q.release();
-        assert!(q.try_acquire());
+        assert!(g1.get() && !g2.get());
+        assert_eq!(q.in_use(), 1);
         q.release();
-        assert!(q.try_acquire());
+        assert!(g2.get());
+        assert_eq!(q.in_use(), 1);
+        q.release();
+        assert_eq!(q.in_use(), 0); // nobody left: the unit finally frees
+
         assert_eq!(s0.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(s1.load(AtomicOrdering::SeqCst), 2);
         assert_eq!(s2.load(AtomicOrdering::SeqCst), 3);
@@ -222,19 +289,13 @@ mod tests {
 
         let order = Arc::new(AtomicUsize::new(0));
         // Register out of priority order; two share priority 5 (FIFO between them).
-        let (w_lo_a, s_lo_a) = recording(&order); // prio 5, first
-        let (w_hi, s_hi) = recording(&order); // prio 1, highest
-        let (w_lo_b, s_lo_b) = recording(&order); // prio 5, second
-        q.register(5, w_lo_a, live());
-        q.register(1, w_hi, live());
-        q.register(5, w_lo_b, live());
+        let (s_lo_a, _g_lo_a) = register_waiter(&mut q, 5, &order); // prio 5, first
+        let (s_hi, _g_hi) = register_waiter(&mut q, 1, &order); // prio 1, highest
+        let (s_lo_b, _g_lo_b) = register_waiter(&mut q, 5, &order); // prio 5, second
 
         q.release(); // highest priority (1) first
-        assert!(q.try_acquire());
         q.release(); // then prio 5, FIFO: lo_a
-        assert!(q.try_acquire());
         q.release(); // then prio 5: lo_b
-        assert!(q.try_acquire());
         assert_eq!(s_hi.load(AtomicOrdering::SeqCst), 1);
         assert_eq!(s_lo_a.load(AtomicOrdering::SeqCst), 2);
         assert_eq!(s_lo_b.load(AtomicOrdering::SeqCst), 3);
@@ -247,32 +308,38 @@ mod tests {
 
         let order = Arc::new(AtomicUsize::new(0));
         let (w_dead, s_dead) = recording(&order);
-        let (w_live, s_live) = recording(&order);
         let dead_flag = live();
-        q.register(0, w_dead, Rc::clone(&dead_flag)); // highest priority, but canceled
-        q.register(1, w_live, live());
+        let dead_granted = live();
+        q.register(0, w_dead, Rc::clone(&dead_flag), Rc::clone(&dead_granted)); // top prio, canceled
+        let (s_live, g_live) = register_waiter(&mut q, 1, &order);
 
         dead_flag.set(true); // abandon the top-priority waiter
 
         q.release();
-        // The canceled entry must be skipped without consuming the wake.
+        // The canceled entry must be skipped without being woken or granted; the
+        // unit is handed to the next live waiter instead.
         assert_eq!(s_dead.load(AtomicOrdering::SeqCst), 0);
+        assert!(!dead_granted.get());
         assert_eq!(s_live.load(AtomicOrdering::SeqCst), 1);
+        assert!(g_live.get());
+        assert_eq!(q.in_use(), 1); // transferred, still in use
     }
 
     #[test]
-    fn release_with_only_canceled_waiters_wakes_nobody() {
+    fn release_with_only_canceled_waiters_frees_the_unit() {
         let mut q: WaitQueue<()> = WaitQueue::new(1);
         assert!(q.try_acquire());
 
         let order = Arc::new(AtomicUsize::new(0));
         let (w, s) = recording(&order);
         let flag = live();
-        q.register((), w, Rc::clone(&flag));
+        let granted = live();
+        q.register((), w, Rc::clone(&flag), Rc::clone(&granted));
         flag.set(true);
 
         q.release();
         assert_eq!(s.load(AtomicOrdering::SeqCst), 0); // never woken
-        assert_eq!(q.in_use(), 0); // unit still returned
+        assert!(!granted.get()); // never granted
+        assert_eq!(q.in_use(), 0); // unit genuinely freed
     }
 }

@@ -237,6 +237,23 @@ request future and its queue entry.
 | `dropped_container_put_does_not_add_level` | Cascade does not add level for a canceled `put` entry |
 | `dropped_container_get_does_not_starve_followup` | Live `get` waiter behind a canceled one is still served by a later `put` |
 
+### tests/same_tick_races.rs — 5 tests
+
+Regression suite for Finding F1 (`reviews/2026-07-01-implementation-review.md`):
+a woken `WaitQueue` waiter must not be stranded — nor jumped in FIFO/priority
+order — by a *fresh* request that lands in the **same ready batch** (both woken
+by one `EventTrigger::fire()`). Four of the five tests fail against the pre-fix
+`release()` (verified by temporary revert); the guard-drop test guards the fixed
+protocol's accounting.
+
+| Test | What it verifies |
+|---|---|
+| `resource_woken_fifo_waiter_beats_same_batch_fresh_request` | `Resource`: the earlier FIFO waiter acquires before a same-batch fresh request and is not stranded when the fresh request holds across a yield |
+| `priority_woken_waiter_beats_same_batch_fresh_request` | `PriorityResource`: same, with the higher-priority woken waiter winning |
+| `preemptive_woken_waiter_beats_same_batch_fresh_request` | `PreemptiveResource`: the plain blocked-waiter release path (also via `WaitQueue`) is not subject to the steal |
+| `resource_granted_then_dropped_passes_unit_to_next_waiter` | Request arm first in the `any_of!`: the grant is consumed into a guard, then the whole arm (guard included) is dropped — the guard drop passes the unit on, no double-release |
+| `resource_granted_but_unconsumed_drop_passes_unit_on` | Timeout arm first in the `any_of!`: the request is dropped while `granted && !consumed` — the request's `Drop` hands the unit on to the next waiter (branch coverage confirmed by instrumentation) |
+
 ### tests/system.rs — 4 tests
 
 Scenario: **Job Shop with Quality Gate** — a machine (`Resource`, capacity 1) and a
@@ -300,11 +317,12 @@ directly (it is not reachable from integration tests). Uses a safe
 
 | Test | What it verifies |
 |---|---|
-| `try_acquire_respects_capacity` | `try_acquire`/`release` track `in_use` against capacity |
-| `fifo_order_for_unit_key` | `WaitQueue<()>` serves waiters in pure insertion (FIFO) order |
+| `try_acquire_respects_capacity` | `try_acquire`/`release` track `in_use` against capacity (no waiters queued) |
+| `release_hands_off_directly_without_freeing_the_unit` | Direct-handoff (F1): `release` transfers the unit to the waiter (`granted` set, woken) with `in_use` pinned at capacity, so a concurrent `try_acquire` cannot steal it |
+| `fifo_order_for_unit_key` | `WaitQueue<()>` hands the unit to waiters in pure insertion (FIFO) order; `in_use` stays at 1 until the queue empties |
 | `priority_order_then_fifo_within_level` | `WaitQueue<u32>` serves lowest key first, FIFO within a level |
-| `release_skips_canceled_waiter` | A canceled top-priority entry is skipped so the next live waiter is woken |
-| `release_with_only_canceled_waiters_wakes_nobody` | All-canceled queue wakes no one but still returns the unit |
+| `release_skips_canceled_waiter` | A canceled top-priority entry is skipped (not woken, not granted) so the next live waiter is handed the unit |
+| `release_with_only_canceled_waiters_frees_the_unit` | All-canceled queue wakes/grants no one and genuinely frees the unit (`in_use` drops) |
 
 ## Benchmark groups (benches/simulation.rs)
 
