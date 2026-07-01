@@ -11,7 +11,10 @@ interact through shared resources and events.
 
 ## 2. Crate Naming
 
-The library crate name is `simu`: short, implies simulation, and likely unclaimed on crates.io.
+The library is imported as `simu` (`use simu::…`). The crates.io **package** name
+`simu` is already taken (an unrelated iOS-simulator CLI), so the crate publishes as
+**`simu-des`** while keeping `[lib] name = "simu"` — users add `simu-des = "0.1"`
+and still write `use simu::…`. See `PUBLISHING.md` for the full release plan.
 
 ---
 
@@ -88,7 +91,7 @@ impl SimEnv {
     pub fn with_source<R: RandomSource + 'static>(source: R) -> Self;
 
     /// Reseed the active randomness source, restarting its stream.
-    pub fn set_seed(&self, seed: u64);
+    pub fn set_seed(&mut self, seed: u64);
 
     /// Return a cloneable handle for passing into processes.
     pub fn handle(&self) -> EnvHandle;
@@ -121,6 +124,8 @@ impl EnvHandle {
     pub fn now(&self) -> f64;
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
+    /// The deadline is fixed at creation (`now() + delay`). Panics if `delay`
+    /// is negative or non-finite (zero is allowed).
     pub fn timeout(&self, delay: f64) -> Timeout;
 
     /// Create a paired `(EventTrigger, EventAwaitable)` for inter-process signalling.
@@ -284,6 +289,11 @@ impl Resource {
 
     /// Total capacity.
     pub fn capacity(&self) -> usize;
+
+    /// Number of processes currently queued (excludes canceled requests).
+    /// `PriorityResource` and `PreemptiveResource` expose the same accessor;
+    /// `Container` exposes `get_queue_len()` / `put_queue_len()`.
+    pub fn queue_len(&self) -> usize;
 }
 ```
 
@@ -352,10 +362,12 @@ impl Container {
     pub fn level(&self) -> f64;
     pub fn capacity(&self) -> f64;
 
-    /// Add `amount`. Suspends if level + amount > capacity. Panics if amount <= 0.
+    /// Add `amount`. Suspends if level + amount > capacity.
+    /// Panics if amount <= 0 or amount > capacity (could never complete).
     pub fn put(&self, amount: f64) -> ContainerPutRequest;
 
-    /// Remove `amount`. Suspends if level < amount. Panics if amount <= 0.
+    /// Remove `amount`. Suspends if level < amount.
+    /// Panics if amount <= 0 or amount > capacity (could never complete).
     pub fn get(&self, amount: f64) -> ContainerGetRequest;
 }
 ```
@@ -443,8 +455,9 @@ let results = monte_carlo::run(0..10, |seed| {
 // results[i] corresponds to seed i
 ```
 
-`monte_carlo::run` collects results in seed order. By default it wraps the closure in an `Arc` and
-spawns one `std::thread` per seed; enabling the `monte-carlo` feature switches the backend to rayon's
+`monte_carlo::run` collects results in seed order. By default it spawns one *scoped* `std::thread`
+per seed (`std::thread::scope`), so the closure may borrow from the caller's stack — no `'static`
+bound and no `Arc` wrap; enabling the `monte-carlo` feature switches the backend to rayon's
 bounded work-stealing pool (preferable for hundreds/thousands of seeds, where one OS thread per seed
 is wasteful). The public contract — seed-ordered results and panic propagation — is identical either
 way. Because `SimEnv` is created *inside* each closure, it never crosses thread boundaries and its
@@ -476,7 +489,7 @@ The following patterns are shared across all suspendable primitives. They are
 implementation details but are documented because they are load-bearing for
 correctness.
 
-### Shared `WaitQueue` for wake-and-retry resources
+### Shared `WaitQueue` for the unit-pool resources (direct handoff)
 
 `Resource` and `PriorityResource` share a single internal helper,
 `resource::wait_queue::WaitQueue<K>` (`pub(crate)`), rather than each
@@ -488,10 +501,25 @@ ascending `(key, seq)` order, so:
 - `Resource` is `WaitQueue<()>` — every key is equal, giving pure FIFO.
 - `PriorityResource` is `WaitQueue<u32>` — lower key first, FIFO within a level.
 
-This keeps the `registered` / `canceled` / release-skip logic in one place (and
-gives `PreemptiveResource` its capacity/queue base). `Container` keeps its
+This keeps the `registered` / `canceled` / `granted` / release logic in one place
+(and gives `PreemptiveResource` its capacity/queue base). `Container` keeps its
 own two-sided amount-based cascade — its commit-at-wake model does not fit the
-wake-and-retry shape — see `trigger_cascade` below.
+same shape — see `trigger_cascade` below.
+
+**Direct handoff (commit-at-wake).** `release` does **not** mark the unit free and
+let woken waiters race for it. Instead it *transfers* the unit: it pops the next
+live waiter, sets that waiter's `granted` flag, wakes it, and leaves `in_use`
+unchanged — the unit is never observably free, so it cannot be `try_acquire`d out
+from under the woken waiter by a fresh request polled in the same ready batch.
+`in_use` drops only when `release` finds no live waiter. Correspondingly,
+`try_acquire` is used only for a request's *initial* attempt; a woken waiter
+returns via its `granted` flag, never by re-acquiring. This closes a
+same-ready-batch stranding deadlock and the FIFO/priority violation it caused —
+see `reviews/2026-07-01-implementation-review.md` (Finding 1). A request that is
+granted but dropped before it re-polls (e.g. a losing `any_of!` arm) calls
+`release` from its `Drop` so the handed-off unit is passed on rather than leaked;
+a request that has turned its grant into a guard records that (`consumed`) so its
+`Drop` does not double-release.
 
 ### `registered` flag
 
@@ -592,7 +620,7 @@ distribution — see `compare/models/_feed.py` and `compare/README.md`.
 
 ## 5. MVP Feature Set
 
-**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (103 passing tests),
+**Status: MVP COMPLETE ✅** — every feature below is implemented, tested (133 passing tests + 7 doc-tests),
 clippy-clean (`-D warnings`), and benchmarked.
 
 | Feature                            | Status      |
@@ -615,7 +643,7 @@ clippy-clean (`-D warnings`), and benchmarked.
 | `any_of!` / `all_of!` macros       | Done ✅     |
 | `Container` (continuous quantity)  | Done ✅     |
 | `ProcessHandle<T>` (observable spawn) | Done ✅  |
-| Test suite (103 unit + integration) | Done ✅     |
+| Test suite (unit + integration + doc-tests; see `TESTING.md`) | Done ✅     |
 | Pluggable `RandomSource` + portable `SplitMix64` feed | Done ✅ |
 | Criterion benchmark suite          | Done ✅     |
 
@@ -795,6 +823,12 @@ No async runtime dependency (tokio, async-std) — the custom executor is self-c
 
 ## 9. Out of Scope for MVP
 
+**Delivered since this list was written** (no longer out of scope): `Container`
+(§4.5) and preemption via `PreemptiveResource` (§4.5) — cooperative-at-yield, the
+DES-idiomatic form of a process interrupt.
+
+Still out of scope:
+
 - Real-time synchronisation.
 - Networked / distributed simulation.
 - GUI or visualisation.
@@ -802,5 +836,7 @@ No async runtime dependency (tokio, async-std) — the custom executor is self-c
 - GPU acceleration.
 - Event recording and replay (seeded determinism already makes replay redundant;
   re-running with the same seed reproduces the run bit-for-bit).
-- Process interrupts and preemption.
-- `Container`, `Store`, `FilterStore` resource types.
+- `Store` / `FilterStore` discrete-item queues.
+- A forcible `Interrupt` primitive targeting an arbitrary suspended process (the
+  cooperative-at-yield `PreemptiveResource` covers the common preemption case;
+  see §6).

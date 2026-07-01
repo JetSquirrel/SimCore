@@ -147,6 +147,19 @@ pub struct Container {
     state: Rc<RefCell<ContainerState>>,
 }
 
+impl std::fmt::Debug for Container {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Container");
+        if let Ok(s) = self.state.try_borrow() {
+            d.field("level", &s.level)
+                .field("capacity", &s.capacity)
+                .field("get_waiters", &s.get_waiters.len())
+                .field("put_waiters", &s.put_waiters.len());
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
 impl Container {
     /// Create an **empty** container with the given capacity.
     ///
@@ -195,16 +208,48 @@ impl Container {
         self.state.borrow().capacity
     }
 
+    /// Number of consumers currently blocked in the `get` queue (waiting for
+    /// enough material). Excludes abandoned (canceled) requests.
+    #[must_use]
+    pub fn get_queue_len(&self) -> usize {
+        self.state
+            .borrow()
+            .get_waiters
+            .iter()
+            .filter(|w| !w.canceled.get())
+            .count()
+    }
+
+    /// Number of producers currently blocked in the `put` queue (waiting for
+    /// enough free space). Excludes abandoned (canceled) requests.
+    #[must_use]
+    pub fn put_queue_len(&self) -> usize {
+        self.state
+            .borrow()
+            .put_waiters
+            .iter()
+            .filter(|w| !w.canceled.get())
+            .count()
+    }
+
     /// Add `amount` to the container.
     ///
     /// Resolves immediately if `level + amount <= capacity`; otherwise
     /// suspends until enough space is available.
     ///
     /// # Panics
-    /// Panics if `amount <= 0`.
+    /// Panics if `amount <= 0`, or if `amount > capacity` — the latter could
+    /// never complete and, under strict head-of-line FIFO, would block every
+    /// later waiter behind it, so it is treated as a programming error. (SimPy
+    /// blocks forever here instead; diverging is deliberate.)
     #[must_use = "futures do nothing unless awaited"]
     pub fn put(&self, amount: f64) -> ContainerPutRequest {
         assert!(amount > 0.0, "Container::put amount must be positive");
+        let capacity = self.state.borrow().capacity;
+        assert!(
+            amount <= capacity,
+            "Container::put amount ({amount}) exceeds capacity ({capacity}); it could never complete"
+        );
         ContainerPutRequest {
             state: Rc::clone(&self.state),
             amount,
@@ -220,10 +265,18 @@ impl Container {
     /// enough material is available.
     ///
     /// # Panics
-    /// Panics if `amount <= 0`.
+    /// Panics if `amount <= 0`, or if `amount > capacity` — the latter could
+    /// never complete and, under strict head-of-line FIFO, would block every
+    /// later waiter behind it, so it is treated as a programming error. (SimPy
+    /// blocks forever here instead; diverging is deliberate.)
     #[must_use = "futures do nothing unless awaited"]
     pub fn get(&self, amount: f64) -> ContainerGetRequest {
         assert!(amount > 0.0, "Container::get amount must be positive");
+        let capacity = self.state.borrow().capacity;
+        assert!(
+            amount <= capacity,
+            "Container::get amount ({amount}) exceeds capacity ({capacity}); it could never complete"
+        );
         ContainerGetRequest {
             state: Rc::clone(&self.state),
             amount,
@@ -251,6 +304,16 @@ pub struct ContainerPutRequest {
     /// to `true` if the future is abandoned before being granted, so the
     /// cascade skips the entry without adding level.
     canceled: Rc<Cell<bool>>,
+}
+
+impl std::fmt::Debug for ContainerPutRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainerPutRequest")
+            .field("amount", &self.amount)
+            .field("registered", &self.registered)
+            .field("done", &self.done.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Future for ContainerPutRequest {
@@ -317,6 +380,16 @@ pub struct ContainerGetRequest {
     /// to `true` if the future is abandoned before being granted, so the
     /// cascade skips the entry without deducting level.
     canceled: Rc<Cell<bool>>,
+}
+
+impl std::fmt::Debug for ContainerGetRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContainerGetRequest")
+            .field("amount", &self.amount)
+            .field("registered", &self.registered)
+            .field("done", &self.done.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Future for ContainerGetRequest {

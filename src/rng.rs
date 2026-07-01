@@ -102,11 +102,6 @@ impl RngCore for SplitMix64 {
             rem.copy_from_slice(&bytes[..rem.len()]);
         }
     }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
 }
 
 impl RandomSource for SplitMix64 {

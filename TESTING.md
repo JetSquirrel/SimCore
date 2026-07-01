@@ -59,27 +59,18 @@ cargo llvm-cov --text
 cargo llvm-cov --open
 ```
 
-Current coverage: **~98% lines** across all library source files (86 integration tests + 17 inline unit tests).
-(The per-file percentages below were last measured before the `WaitQueue`/`PreemptiveResource`/`rng`
-additions; re-run `cargo llvm-cov` to refresh.)
+The suite currently runs **~140 tests** (≈107 integration + ≈27 inline unit) plus
+7 doc-tests, all green on both the default and `--features monte-carlo` builds.
+Line coverage has historically sat around ~98%; rather than pin per-file numbers
+that go stale, regenerate them on demand:
 
-| File | Line coverage |
-|---|---|
-| `timeout.rs` | 100% |
-| `executor/mod.rs` | 100% |
-| `executor/waker.rs` | 100% |
-| `event.rs` | 100% |
-| `resource/mod.rs` | 100% |
-| `resource/wait_queue.rs` | covered by inline unit tests |
-| `resource/preemptive.rs` | covered by `tests/preemptive_resource.rs` |
-| `rng.rs` | covered by inline unit tests + `tests/external_feed.rs` |
-| `monte_carlo.rs` | 100% |
-| `env.rs` | 99% |
-| `executor/queue.rs` | 90% |
+```bash
+cargo llvm-cov --summary-only        # headline + per-file table
+```
 
-The remaining gap in `executor/queue.rs` is the noop-waker vtable callbacks
-(`clone`, `wake`, `drop`) inside the `#[cfg(test)]` block — test infrastructure
-that is intentionally never invoked.
+The only intentionally-uncovered lines are the noop-waker vtable callbacks
+(`clone`/`wake`/`drop`) inside `executor/queue.rs`'s `#[cfg(test)]` block — test
+infrastructure that is never actually invoked.
 
 ## Structure
 
@@ -128,7 +119,7 @@ All tests use `SimEnv::with_seed(0)` (or another fixed seed) for reproducibility
 |---|---|
 | `acquire_when_capacity_available` | Process acquires without suspending when capacity is free |
 | `block_and_wake_on_drop` | Waiter unblocks exactly when the guard is dropped |
-| `fifo_ordering_three_waiters` | Waiters are served in spawn order (`VecDeque` push_back/pop_front) |
+| `fifo_ordering_three_waiters` | Waiters are served in spawn order (`WaitQueue<()>` heap, FIFO by insertion `seq`) |
 | `guard_drop_releases_exactly_one` | Dropping a guard wakes exactly one waiter, not all |
 | `in_use_and_capacity_counters` | `in_use()` and `capacity()` return correct values throughout the lifecycle |
 | `zero_capacity_panics` | `Resource::new(0)` panics with the expected message |
@@ -237,7 +228,36 @@ request future and its queue entry.
 | `dropped_container_put_does_not_add_level` | Cascade does not add level for a canceled `put` entry |
 | `dropped_container_get_does_not_starve_followup` | Live `get` waiter behind a canceled one is still served by a later `put` |
 
-### tests/system.rs — 4 tests
+### tests/same_tick_races.rs — 5 tests
+
+Regression suite for Finding F1 (`reviews/2026-07-01-implementation-review.md`):
+a woken `WaitQueue` waiter must not be stranded — nor jumped in FIFO/priority
+order — by a *fresh* request that lands in the **same ready batch** (both woken
+by one `EventTrigger::fire()`). Four of the five tests fail against the pre-fix
+`release()` (verified by temporary revert); the guard-drop test guards the fixed
+protocol's accounting.
+
+| Test | What it verifies |
+|---|---|
+| `resource_woken_fifo_waiter_beats_same_batch_fresh_request` | `Resource`: the earlier FIFO waiter acquires before a same-batch fresh request and is not stranded when the fresh request holds across a yield |
+| `priority_woken_waiter_beats_same_batch_fresh_request` | `PriorityResource`: same, with the higher-priority woken waiter winning |
+| `preemptive_woken_waiter_beats_same_batch_fresh_request` | `PreemptiveResource`: the plain blocked-waiter release path (also via `WaitQueue`) is not subject to the steal |
+| `resource_granted_then_dropped_passes_unit_to_next_waiter` | Request arm first in the `any_of!`: the grant is consumed into a guard, then the whole arm (guard included) is dropped — the guard drop passes the unit on, no double-release |
+| `resource_granted_but_unconsumed_drop_passes_unit_on` | Timeout arm first in the `any_of!`: the request is dropped while `granted && !consumed` — the request's `Drop` hands the unit on to the next waiter (branch coverage confirmed by instrumentation) |
+
+### tests/adversarial_scheduling.rs — 3 tests
+
+Same-ready-batch scheduling probes (Finding T2): a shared `EventAwaitable` +
+one `fire()` forces N processes into a single `poll_ready` batch, then stresses
+the orderings that broke F1.
+
+| Test | What it verifies |
+|---|---|
+| `double_release_with_two_waiters_same_batch` | Cap-2 pool: two same-batch releases + two earlier waiters + a fresh requester — waiters served first, fresh one queues behind, accounting balances |
+| `preempt_during_batch` | A high-priority `PreemptiveResource` request evicts a holder while unrelated processes share the batch; victim observes preemption |
+| `container_mixed_put_get_same_batch` | Three `put`s released in one batch serve three blocked `get`s in FIFO via the cascade, with no level drift |
+
+### tests/system.rs — 5 tests
 
 Scenario: **Job Shop with Quality Gate** — a machine (`Resource`, capacity 1) and a
 quality gate (`EventTrigger`/`EventAwaitable`). No job may start until the inspector
@@ -249,6 +269,7 @@ fires the gate at t=3. Three jobs then queue for the machine sequentially.
 | `test_system_determinism` | Same seed → identical trace; different seed → different trace (RNG-driven durations) |
 | `monte_carlo_run` | `monte_carlo::run` spawns one thread per seed, returns results in seed order |
 | `dropping_env_reclaims_suspended_processes` | Dropping a `SimEnv` with a still-suspended process breaks the `SimState`↔process `Rc` cycle (no leak across replications) |
+| `monte_carlo_propagates_worker_panic` | A worker panic is re-raised on the caller via `resume_unwind` (Finding T4; holds on both backends) |
 
 ### tests/external_feed.rs — 5 tests
 
@@ -300,11 +321,12 @@ directly (it is not reachable from integration tests). Uses a safe
 
 | Test | What it verifies |
 |---|---|
-| `try_acquire_respects_capacity` | `try_acquire`/`release` track `in_use` against capacity |
-| `fifo_order_for_unit_key` | `WaitQueue<()>` serves waiters in pure insertion (FIFO) order |
+| `try_acquire_respects_capacity` | `try_acquire`/`release` track `in_use` against capacity (no waiters queued) |
+| `release_hands_off_directly_without_freeing_the_unit` | Direct-handoff (F1): `release` transfers the unit to the waiter (`granted` set, woken) with `in_use` pinned at capacity, so a concurrent `try_acquire` cannot steal it |
+| `fifo_order_for_unit_key` | `WaitQueue<()>` hands the unit to waiters in pure insertion (FIFO) order; `in_use` stays at 1 until the queue empties |
 | `priority_order_then_fifo_within_level` | `WaitQueue<u32>` serves lowest key first, FIFO within a level |
-| `release_skips_canceled_waiter` | A canceled top-priority entry is skipped so the next live waiter is woken |
-| `release_with_only_canceled_waiters_wakes_nobody` | All-canceled queue wakes no one but still returns the unit |
+| `release_skips_canceled_waiter` | A canceled top-priority entry is skipped (not woken, not granted) so the next live waiter is handed the unit |
+| `release_with_only_canceled_waiters_frees_the_unit` | All-canceled queue wakes/grants no one and genuinely frees the unit (`in_use` drops) |
 
 ## Benchmark groups (benches/simulation.rs)
 
@@ -314,10 +336,13 @@ N values are the parameterized workload sizes passed to `BenchmarkId`.
 | Group | What it measures | N values |
 |---|---|---|
 | `timeout_throughput` | Raw event-queue + executor throughput (BinaryHeap push/pop, RefCell borrows, waker path) | 1 000 / 10 000 / 100 000 |
-| `resource_contention` | `ResourceRequest` waker registration, `VecDeque` push/pop, `ResourceGuard::Drop` wake chain | 100 / 1 000 / 10 000 |
+| `resource_contention` | `ResourceRequest` waker registration, `WaitQueue` heap push/pop, `ResourceGuard::Drop` direct-handoff chain | 100 / 1 000 / 10 000 |
 | `event_broadcast` | `EventAwaitable` waker registration and `waiters.drain(..)` dispatch when all N wake simultaneously | 100 / 1 000 / 10 000 |
 | `mixed_workload` | End-to-end throughput combining spawn, timeouts, and two resources (nurse cap=1, beds cap=3) | 100 / 1 000 / 10 000 |
 | `monte_carlo_scaling` | Parallelism efficiency: K independent copies of `mixed_workload(100)` via `monte_carlo::run` | 1 / 2 / 4 / 8 threads |
+| `priority_contention` | `PriorityResource` heap ordering (`BinaryHeap<Entry<u32>>`) across four priority levels + handoff chain | 100 / 1 000 / 10 000 |
+| `preemptive_contention` | `PreemptiveResource` eviction path: victim scan + holder registry under alternating hi/lo priorities (cap 2) | 100 / 1 000 / 10 000 |
+| `container_throughput` | `Container` head-of-line FIFO cascade (`wake_get`/`wake_put_waiters`) with N producers/consumers | 100 / 1 000 / 10 000 |
 
 ## Cross-engine parity (SimPy)
 

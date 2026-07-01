@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::PriorityResource;
 
 type Log = Rc<RefCell<Vec<String>>>;

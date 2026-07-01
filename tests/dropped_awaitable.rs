@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::{any_of, Container, PriorityResource, Resource};
 
 type Log = Rc<RefCell<Vec<String>>>;

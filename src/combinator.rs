@@ -20,6 +20,14 @@ pub struct AnyOf {
     futures: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
+impl std::fmt::Debug for AnyOf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnyOf")
+            .field("pending", &self.futures.len())
+            .finish()
+    }
+}
+
 impl AnyOf {
     /// Create an `AnyOf` combinator from a list of futures.
     ///
@@ -63,6 +71,14 @@ pub struct AllOf {
     futures: Vec<Pin<Box<dyn Future<Output = ()>>>>,
 }
 
+impl std::fmt::Debug for AllOf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AllOf")
+            .field("pending", &self.futures.len())
+            .finish()
+    }
+}
+
 impl AllOf {
     /// Create an `AllOf` combinator from a list of futures.
     ///
@@ -103,13 +119,23 @@ impl Future for AllOf {
 ///
 /// # Example
 ///
-/// ```ignore
-/// any_of![h.timeout(10.0), signal.clone()].await;
+/// ```
+/// use simu::{SimEnv, any_of};
+/// let mut env = SimEnv::with_seed(0);
+/// let h = env.handle();
+/// let (trigger, signal) = env.event();
+/// env.spawn(async move { h.timeout(3.0).await; trigger.fire(); });
+/// let h2 = env.handle();
+/// env.spawn(async move {
+///     // resolves at t=3 (the event) rather than t=10 (the timeout)
+///     any_of![h2.timeout(10.0), signal.clone()].await;
+/// });
+/// env.run();
 /// ```
 #[macro_export]
 macro_rules! any_of {
     ($($fut:expr),+ $(,)?) => {
-        $crate::combinator::AnyOf::new(
+        $crate::AnyOf::new(
             vec![$(::std::boxed::Box::pin($fut)),+]
         )
     };
@@ -122,13 +148,20 @@ macro_rules! any_of {
 ///
 /// # Example
 ///
-/// ```ignore
-/// all_of![phase_a, phase_b, phase_c].await;
+/// ```
+/// use simu::{SimEnv, all_of};
+/// let mut env = SimEnv::with_seed(0);
+/// let h = env.handle();
+/// env.spawn(async move {
+///     // resolves at t=5, when the slowest sub-future completes
+///     all_of![h.timeout(1.0), h.timeout(3.0), h.timeout(5.0)].await;
+/// });
+/// env.run();
 /// ```
 #[macro_export]
 macro_rules! all_of {
     ($($fut:expr),+ $(,)?) => {
-        $crate::combinator::AllOf::new(
+        $crate::AllOf::new(
             vec![$(::std::boxed::Box::pin($fut)),+]
         )
     };

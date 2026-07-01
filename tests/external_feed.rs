@@ -8,7 +8,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::rng::{sample, SplitMix64};
 use simu::{EnvHandle, Resource};
 
@@ -62,7 +62,7 @@ fn different_seeds_diverge() {
 #[test]
 fn set_seed_restarts_the_stream() {
     // Draw a few values, reseed, and confirm the stream restarts.
-    let env = SimEnv::with_source(SplitMix64::new(42));
+    let mut env = SimEnv::with_source(SplitMix64::new(42));
     let first: u64 = {
         use rand::RngCore;
         env.handle().rng().next_u64()

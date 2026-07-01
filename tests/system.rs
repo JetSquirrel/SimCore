@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::RngCore;
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::Resource;
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -146,4 +146,36 @@ fn dropping_env_reclaims_suspended_processes() {
         weak.upgrade().is_none(),
         "suspended process leaked: SimState↔process cycle not broken on drop"
     );
+}
+
+// --- T4: monte_carlo::run must re-raise a worker panic on the caller ---
+// This runs against whichever backend is compiled (std::thread by default,
+// rayon under --features monte-carlo); the panic-propagation contract is
+// identical for both.
+
+#[test]
+#[should_panic(expected = "worker boom")]
+fn monte_carlo_propagates_worker_panic() {
+    let _ = simu::monte_carlo::run(0..8u64, |seed| {
+        if seed == 5 {
+            panic!("worker boom");
+        }
+        seed * 2
+    });
+}
+
+// --- A5: monte_carlo::run accepts borrowing (non-'static) closures ---
+
+#[test]
+fn monte_carlo_accepts_borrowing_closure() {
+    // The scoped-thread backend must let the closure borrow caller-stack data
+    // (pre-A5 the `'static` bound forced moves/clones). This is primarily a
+    // compile-time proof; the assertions confirm the borrowed data was used.
+    let offsets: Vec<u64> = vec![100, 200, 300];
+    let results = simu::monte_carlo::run(0..3u64, |seed| {
+        // `offsets` is borrowed, not moved.
+        offsets[seed as usize] + seed
+    });
+    assert_eq!(results, vec![100, 201, 302]);
+    assert_eq!(offsets.len(), 3); // still usable after: proof it was borrowed
 }

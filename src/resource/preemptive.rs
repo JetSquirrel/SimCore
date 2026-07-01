@@ -15,15 +15,24 @@
 //! holder's unit is transferred away immediately *and* its preemption signal is
 //! fired. A well-behaved victim races its work against that signal:
 //!
-//! ```ignore
-//! let guard = res.request(2).await;
-//! // Race the service time against a possible preemption.
-//! any_of![env.timeout(service), guard.preempted()].await;
-//! if guard.is_preempted() {
-//!     // Higher-priority work took the unit — abandon and clean up.
-//!     return;
-//! }
-//! // Completed normally; dropping the guard releases the unit.
+//! ```
+//! use simu::{SimEnv, PreemptiveResource, any_of};
+//! let mut env = SimEnv::with_seed(0);
+//! let res = PreemptiveResource::new(1);
+//! let h = env.handle();
+//! let r = res.clone();
+//! env.spawn(async move {
+//!     let guard = r.request(2).await;
+//!     let service = 10.0;
+//!     // Race the service time against a possible preemption.
+//!     any_of![h.timeout(service), guard.preempted()].await;
+//!     if guard.is_preempted() {
+//!         // Higher-priority work took the unit — abandon and clean up.
+//!         return;
+//!     }
+//!     // Completed normally; dropping the guard releases the unit.
+//! });
+//! env.run();
 //! ```
 //!
 //! A victim that ignores its signal keeps running (it has already lost the unit
@@ -108,6 +117,18 @@ pub struct PreemptiveResource {
     state: Rc<RefCell<PreemptiveState>>,
 }
 
+impl std::fmt::Debug for PreemptiveResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("PreemptiveResource");
+        if let Ok(s) = self.state.try_borrow() {
+            d.field("in_use", &s.wq.in_use())
+                .field("capacity", &s.wq.capacity())
+                .field("queue_len", &s.wq.live_waiters());
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
 impl PreemptiveResource {
     /// Create a new preemptive resource pool with the given capacity.
     ///
@@ -145,7 +166,9 @@ impl PreemptiveResource {
             state: Rc::clone(&self.state),
             priority,
             registered: false,
+            consumed: false,
             canceled: Rc::new(Cell::new(false)),
+            granted: Rc::new(Cell::new(false)),
         }
     }
 
@@ -159,6 +182,14 @@ impl PreemptiveResource {
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.state.borrow().wq.capacity()
+    }
+
+    /// Number of processes currently *blocked* waiting for a unit (i.e. those
+    /// that could neither take a free unit nor preempt a holder). Excludes
+    /// abandoned (canceled) requests and current holders.
+    #[must_use]
+    pub fn queue_len(&self) -> usize {
+        self.state.borrow().wq.live_waiters()
     }
 }
 
@@ -195,13 +226,38 @@ pub struct PreemptiveRequest {
     state: Rc<RefCell<PreemptiveState>>,
     priority: u32,
     registered: bool,
+    /// Set once a granted/acquired unit has become a holder+guard; `Drop` then
+    /// must not release (the guard owns the unit).
+    consumed: bool,
     canceled: Rc<Cell<bool>>,
+    /// Shared with the queue entry; set to `true` by `WaitQueue::release` when a
+    /// released unit is handed directly to this blocked request. Checked first
+    /// in `poll`, exactly like the plain `Resource` handoff.
+    granted: Rc<Cell<bool>>,
+}
+
+impl std::fmt::Debug for PreemptiveRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreemptiveRequest")
+            .field("priority", &self.priority)
+            .field("registered", &self.registered)
+            .field("granted", &self.granted.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Future for PreemptiveRequest {
     type Output = PreemptiveGuard;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<PreemptiveGuard> {
+        // Direct handoff: a released unit was transferred to us by `wq.release`.
+        // `in_use` already accounts for it and the releasing guard removed its
+        // holder entry, so we simply register our own holder via grant().
+        if self.granted.get() {
+            self.consumed = true;
+            return Poll::Ready(grant(&self.state, self.priority));
+        }
+
         // Decide the outcome while holding the borrow, but build the guard
         // afterwards (grant() re-borrows state).
         enum Outcome {
@@ -218,16 +274,22 @@ impl Future for PreemptiveRequest {
                 Outcome::Preempt(idx)
             } else {
                 if !self.registered {
-                    state
-                        .wq
-                        .register(self.priority, cx.waker().clone(), Rc::clone(&self.canceled));
+                    state.wq.register(
+                        self.priority,
+                        cx.waker().clone(),
+                        Rc::clone(&self.canceled),
+                        Rc::clone(&self.granted),
+                    );
                 }
                 Outcome::Block
             }
         };
 
         match outcome {
-            Outcome::Free => Poll::Ready(grant(&self.state, self.priority)),
+            Outcome::Free => {
+                self.consumed = true;
+                Poll::Ready(grant(&self.state, self.priority))
+            }
             Outcome::Preempt(idx) => {
                 // Evict the victim: fire its signal and remove its holder entry.
                 // Capacity bookkeeping is unchanged — the unit transfers
@@ -240,6 +302,7 @@ impl Future for PreemptiveRequest {
                 if let Some(trigger) = victim.trigger {
                     trigger.fire();
                 }
+                self.consumed = true;
                 Poll::Ready(grant(&self.state, self.priority))
             }
             Outcome::Block => {
@@ -252,7 +315,15 @@ impl Future for PreemptiveRequest {
 
 impl Drop for PreemptiveRequest {
     fn drop(&mut self) {
-        if self.registered {
+        if self.consumed {
+            return; // the guard owns the unit and will release it
+        }
+        if self.granted.get() {
+            // A unit was handed to us but never turned into a holder (dropped
+            // before re-poll). No holder was created yet, so just release it
+            // back into the queue to hand it on to the next waiter.
+            self.state.borrow_mut().wq.release();
+        } else if self.registered {
             self.canceled.set(true);
         }
     }
@@ -268,6 +339,15 @@ pub struct PreemptiveGuard {
     id: u64,
     signal: EventAwaitable,
     preempted: Rc<Cell<bool>>,
+}
+
+impl std::fmt::Debug for PreemptiveGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreemptiveGuard")
+            .field("id", &self.id)
+            .field("preempted", &self.preempted.get())
+            .finish_non_exhaustive()
+    }
 }
 
 impl PreemptiveGuard {

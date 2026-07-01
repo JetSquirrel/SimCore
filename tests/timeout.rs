@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::RngCore;
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::{all_of, any_of};
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -195,17 +195,95 @@ fn any_of_first_pass_all_pending() {
 
 #[test]
 fn rng_guard_covers_all_rngcore_methods() {
-    // Exercise next_u32, fill_bytes, and try_fill_bytes on the RNG guard so
-    // that all RngCore delegation methods are covered.
+    // Exercise next_u32, next_u64, and fill_bytes on the RNG guard so that all
+    // RngCore delegation methods are covered. (rand 0.9 moved try_fill_bytes to
+    // the blanket TryRngCore trait, so it is no longer a method we delegate.)
     let env = SimEnv::with_seed(0);
     let h = env.handle();
 
     let _ = h.rng().next_u32();
+    let _ = h.rng().next_u64();
 
     let mut buf = [0u8; 8];
     h.rng().fill_bytes(&mut buf);
     assert_ne!(buf, [0u8; 8], "fill_bytes should write non-zero bytes");
+}
 
-    let mut buf2 = [0u8; 8];
-    h.rng().try_fill_bytes(&mut buf2).unwrap();
+// --- F2: run_until must not rewind the clock ---
+
+#[test]
+fn run_until_does_not_rewind_past_boundary() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    env.spawn(async move {
+        h.timeout(10.0).await;
+    });
+    env.run();
+    assert_eq!(env.now(), 10.0);
+
+    // A boundary in the past must be a no-op — time is monotonic.
+    env.run_until(5.0);
+    assert_eq!(env.now(), 10.0, "run_until rewound the clock");
+}
+
+#[test]
+fn run_until_advances_to_boundary_when_queue_empties_early() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    env.spawn(async move {
+        h.timeout(3.0).await;
+    });
+    // Only event is at t=3, but we ask to run to t=10: clock advances to 10.
+    env.run_until(10.0);
+    assert_eq!(env.now(), 10.0);
+}
+
+// --- F3: negative / NaN / infinite timeout delays are programming errors ---
+
+#[test]
+#[should_panic(expected = "timeout delay must be finite and non-negative")]
+fn negative_timeout_delay_panics() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    env.spawn(async move {
+        h.timeout(-5.0).await;
+    });
+    env.run();
+}
+
+#[test]
+#[should_panic(expected = "timeout delay must be finite and non-negative")]
+fn nan_timeout_delay_panics() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    env.spawn(async move {
+        h.timeout(f64::NAN).await;
+    });
+    env.run();
+}
+
+#[test]
+#[should_panic(expected = "timeout delay must be finite and non-negative")]
+fn infinite_timeout_delay_panics() {
+    let mut env = SimEnv::with_seed(0);
+    let h = env.handle();
+    env.spawn(async move {
+        h.timeout(f64::INFINITY).await;
+    });
+    env.run();
+}
+
+#[test]
+fn zero_timeout_delay_is_allowed() {
+    // Regression guard for F3: the panic must not reject a legitimate zero delay.
+    let mut env = SimEnv::with_seed(0);
+    let log = new_log();
+    let l2 = log.clone();
+    let h = env.handle();
+    env.spawn(async move {
+        h.timeout(0.0).await;
+        l2.borrow_mut().push(format!("{}", h.now()));
+    });
+    env.run();
+    assert_eq!(*log.borrow(), vec!["0"]);
 }

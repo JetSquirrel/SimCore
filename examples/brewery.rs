@@ -169,7 +169,7 @@ async fn qa_inspector(env: EnvHandle, ctx: BreweryCtx) {
         env.timeout(dt).await;
         if env.now() > SIM_DURATION { break; }
 
-        let hit = env.rng().gen::<f64>() < CONTAMINATION_PROB;
+        let hit = env.rng().random::<f64>() < CONTAMINATION_PROB;
         if !hit { continue; }
 
         let victim_id = ctx.contamination_map.borrow().keys().next().copied();
@@ -327,7 +327,7 @@ async fn arrivals(env: EnvHandle, ctx: BreweryCtx) {
             break;
         }
 
-        let premium = env.rng().gen::<f64>() < PREMIUM_PROB;
+        let premium = env.rng().random::<f64>() < PREMIUM_PROB;
         {
             let mut s = ctx.stats.borrow_mut();
             s.batches_arrived += 1;

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::env::SimEnv;
+use simu::SimEnv;
 use simu::Resource;
 
 type Log = Rc<RefCell<Vec<String>>>;
@@ -185,4 +185,48 @@ fn in_use_and_capacity_counters() {
 #[should_panic(expected = "capacity must be at least 1")]
 fn zero_capacity_panics() {
     let _ = Resource::new(0);
+}
+
+// --- A6: queue_len introspection ---
+
+#[test]
+fn queue_len_tracks_waiters() {
+    let mut env = SimEnv::with_seed(0);
+    let r = Resource::new(1);
+
+    // Holder grabs the unit and holds it a while.
+    {
+        let r = r.clone();
+        let h = env.handle();
+        env.spawn(async move {
+            let _g = r.request().await;
+            h.timeout(100.0).await;
+        });
+    }
+    // Two waiters queue up behind it.
+    for _ in 0..2 {
+        let r = r.clone();
+        let h = env.handle();
+        env.spawn(async move {
+            let _g = r.request().await;
+            h.timeout(1.0).await;
+        });
+    }
+
+    // Run only to t=1 so the holder is still holding and both waiters parked.
+    env.run_until(1.0);
+    assert_eq!(r.queue_len(), 2, "two processes should be queued");
+    assert_eq!(r.in_use(), 1);
+
+    env.run();
+    assert_eq!(r.queue_len(), 0, "queue drains by end of run");
+}
+
+#[test]
+fn resource_debug_is_informative() {
+    // A7: Debug impl should render without panicking and mention the type.
+    let r = Resource::new(2);
+    let s = format!("{r:?}");
+    assert!(s.contains("Resource"), "got: {s}");
+    assert!(s.contains("capacity"), "got: {s}");
 }

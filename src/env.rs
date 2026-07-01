@@ -9,7 +9,7 @@ use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 
 use crate::event::{new_event, EventAwaitable, EventTrigger};
-use crate::executor::{make_waker, SimState};
+use crate::executor::{make_waker, ProcessEntry, SimState};
 use crate::process::{spawn_with_handle, ProcessHandle};
 use crate::rng::RandomSource;
 use crate::timeout::Timeout;
@@ -44,13 +44,36 @@ impl Default for SimEnv {
     }
 }
 
+impl std::fmt::Debug for SimEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("SimEnv");
+        if let Ok(state) = self.state.try_borrow() {
+            let live = state.processes.iter().filter(|p| p.is_some()).count();
+            d.field("now", &state.current_time)
+                .field("queued_events", &state.event_queue.len())
+                .field("processes", &live);
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for EnvHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("EnvHandle");
+        if let Ok(state) = self.state.try_borrow() {
+            d.field("now", &state.current_time);
+        }
+        d.finish_non_exhaustive()
+    }
+}
+
 impl SimEnv {
     /// Create a new environment seeded from OS entropy.
     ///
     /// Use [`with_seed`](SimEnv::with_seed) when reproducibility is required.
     #[must_use]
     pub fn new() -> Self {
-        SimEnv::from_source(Box::new(StdRng::from_entropy()))
+        SimEnv::from_source(Box::new(StdRng::from_os_rng()))
     }
 
     /// Create a new environment with a fixed RNG seed.
@@ -88,9 +111,11 @@ impl SimEnv {
 
     /// Re-seed the environment's randomness source, restarting its stream.
     ///
+    /// Takes `&mut self` for consistency with [`run`](SimEnv::run) — reseeding
+    /// mid-run would change the draw stream, so it is an owner-level operation.
     /// Delegates to [`RandomSource::reseed`]; panics if the active source does
     /// not support reseeding.
-    pub fn set_seed(&self, seed: u64) {
+    pub fn set_seed(&mut self, seed: u64) {
         self.rng.borrow_mut().reseed(seed);
     }
 
@@ -123,6 +148,11 @@ impl SimEnv {
     }
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `delay` is negative or not finite — see
+    /// [`EnvHandle::timeout`].
     #[must_use = "futures do nothing unless awaited"]
     pub fn timeout(&self, delay: f64) -> Timeout {
         self.handle().timeout(delay)
@@ -154,6 +184,13 @@ impl SimEnv {
     }
 
     /// Run until simulated time reaches `until`.
+    ///
+    /// When the event queue empties (or its next event is beyond `until`) the
+    /// clock advances *to* `until` — but never backwards: simulated time is
+    /// monotonic, so calling `run_until` with a boundary at or before the
+    /// current time is a no-op that leaves `now()` unchanged. An event scheduled
+    /// exactly at `until` is not run (its time is not strictly less than the
+    /// boundary), yet `now()` will report `until`.
     pub fn run_until(&mut self, until: f64) {
         self.drain_pending_spawns();
         self.poll_ready();
@@ -168,7 +205,9 @@ impl SimEnv {
             };
 
             if should_stop {
-                self.state.borrow_mut().current_time = until;
+                // Advance to the boundary, but never rewind: time is monotonic.
+                let mut state = self.state.borrow_mut();
+                state.current_time = until.max(state.current_time);
                 break;
             }
 
@@ -193,8 +232,14 @@ impl SimEnv {
         let ids: Vec<usize> = spawns.iter().map(|(id, _)| *id).collect();
         {
             let mut state = self.state.borrow_mut();
-            for (id, fut) in spawns {
-                state.processes.insert(id, fut);
+            let ready_queue = Arc::clone(&state.ready_queue);
+            for (id, future) in spawns {
+                // Cache one waker per process now, at admission (see ProcessEntry).
+                let waker = make_waker(id, Arc::clone(&ready_queue));
+                if id >= state.processes.len() {
+                    state.processes.resize_with(id + 1, || None);
+                }
+                state.processes[id] = Some(ProcessEntry { future, waker });
             }
         }
         // Clone the Arc so the Ref<SimState> is dropped before we lock.
@@ -204,9 +249,11 @@ impl SimEnv {
 
     /// Poll every process in the ready queue until the queue is empty.
     ///
-    /// Each process is removed from the process table before polling so that
-    /// it can freely borrow `SimState` via its `EnvHandle` without triggering
-    /// a `RefCell` panic. Processes that return `Pending` are re-inserted.
+    /// Each process is taken out of its table slot before polling so that it can
+    /// freely borrow `SimState` via its `EnvHandle` without triggering a
+    /// `RefCell` panic. Processes that return `Pending` are put back. A slot that
+    /// is already `None` (a completed process, or a duplicate wake for one whose
+    /// entry is currently taken) is simply skipped — polling a stale id is benign.
     fn poll_ready(&self) {
         // Clone the ready_queue Arc once; it never changes after construction.
         let ready_queue = Arc::clone(&self.state.borrow().ready_queue);
@@ -219,14 +266,14 @@ impl SimEnv {
             }
 
             for id in ready {
-                let process = self.state.borrow_mut().processes.remove(&id);
+                // `id` was allocated by `alloc_process_id`, so the slot exists.
+                let entry = self.state.borrow_mut().processes[id].take();
 
-                if let Some(mut process) = process {
-                    let waker = make_waker(id, Arc::clone(&ready_queue));
-                    let mut cx = Context::from_waker(&waker);
+                if let Some(mut entry) = entry {
+                    let mut cx = Context::from_waker(&entry.waker);
 
-                    if process.as_mut().poll(&mut cx).is_pending() {
-                        self.state.borrow_mut().processes.insert(id, process);
+                    if entry.future.as_mut().poll(&mut cx).is_pending() {
+                        self.state.borrow_mut().processes[id] = Some(entry);
                     }
 
                     // A process may spawn children during its poll.
@@ -270,11 +317,17 @@ impl EnvHandle {
 
     /// Borrow the shared RNG mutably.
     ///
-    /// The returned guard implements `rand::RngCore`, so distributions can be
-    /// sampled directly:
+    /// The returned guard implements `rand::RngCore`, so it works with the
+    /// [`rng::sample`](crate::rng::sample) transforms and with `rand_distr`
+    /// distributions alike. Sample *before* awaiting — the guard cannot be held
+    /// across an `.await` point.
     ///
-    /// ```ignore
-    /// let duration = env.rng().sample(Exp::new(1.0 / 20.0).unwrap());
+    /// ```
+    /// use simu::{SimEnv, rng::sample};
+    /// let env = SimEnv::with_seed(0);
+    /// let h = env.handle();
+    /// let duration = sample::exponential(&mut h.rng(), 20.0); // mean = 20
+    /// assert!(duration >= 0.0);
     /// ```
     #[must_use = "an RngGuard holds a mutable borrow of the env RNG; bind or use it directly"]
     pub fn rng(&self) -> impl rand::RngCore + '_ {
@@ -282,8 +335,22 @@ impl EnvHandle {
     }
 
     /// Create a `Timeout` that resolves after `delay` simulated time units.
+    ///
+    /// The deadline is computed **when the `Timeout` is created**
+    /// (`now() + delay`), not when it is first awaited — relevant when a
+    /// `Timeout` is stored and raced later inside `any_of!`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `delay` is negative or not finite (NaN / infinity). Simulated
+    /// time is monotonic, so a negative delay is a programming error; a zero
+    /// delay is allowed and fires on the next event-loop iteration.
     #[must_use = "futures do nothing unless awaited"]
     pub fn timeout(&self, delay: f64) -> Timeout {
+        assert!(
+            delay >= 0.0 && delay.is_finite(),
+            "timeout delay must be finite and non-negative (got {delay})"
+        );
         let deadline = self.state.borrow().current_time + delay;
         Timeout::new(deadline, self.clone())
     }
@@ -332,8 +399,5 @@ impl RngCore for RngGuard<'_> {
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         (**self.0).fill_bytes(dest)
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-        (**self.0).try_fill_bytes(dest)
     }
 }

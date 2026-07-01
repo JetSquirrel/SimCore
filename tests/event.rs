@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::env::SimEnv;
+use simu::SimEnv;
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }
@@ -177,4 +177,29 @@ fn envhandle_event_method() {
     env.run();
 
     assert_eq!(*log.borrow(), vec!["woken:4"]);
+}
+
+// --- F6: dropping an unfired EventTrigger strands its waiters (documented) ---
+
+#[test]
+fn dropped_unfired_trigger_strands_waiter() {
+    // A process awaiting an event whose trigger is dropped without firing must
+    // never resolve; the run still terminates (no other events) and SimEnv's
+    // Drop reclaims the suspended process. This documents the F6 semantics.
+    let mut env = SimEnv::with_seed(0);
+    let log = new_log();
+    let l2 = log.clone();
+    let (trigger, awaitable) = env.event();
+
+    env.spawn(async move {
+        awaitable.await;
+        l2.borrow_mut().push("resolved".to_string());
+    });
+
+    // Drop the trigger without firing.
+    drop(trigger);
+    env.run();
+
+    // The waiter never resolved.
+    assert!(log.borrow().is_empty(), "waiter unexpectedly resolved: {:?}", log.borrow());
 }
