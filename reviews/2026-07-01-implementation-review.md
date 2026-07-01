@@ -217,7 +217,7 @@ waking (`container.rs`, `done: Rc<Cell<bool>>`). Bring `WaitQueue` to the same m
   `hospital.early_discharged` (the `KNOWN_EXCEPTIONS` entry) changes and update the allowlist and
   the memory/docs if the divergence disappears.
 
-## F2. `run_until(t)` with `t` in the past rewinds the clock — **OPEN**
+## F2. `run_until(t)` with `t` in the past rewinds the clock — **FIXED (verified)**
 
 **Severity: LOW-MEDIUM (silent wrong results).** File: `src/env.rs:157-183`.
 **Model: Sonnet.**
@@ -229,7 +229,7 @@ that (a) the clock advances *to* `until` when the queue empties early, and (b) a
 past is a no-op. Add two small tests (`run_until` past boundary; `run_until` early-empty queue
 jumps to the boundary — the second behaviour exists but is untested).
 
-## F3. Negative (and NaN) timeout delays rewind / wedge the clock — **OPEN**
+## F3. Negative (and NaN) timeout delays rewind / wedge the clock — **FIXED (verified)**
 
 **Severity: MEDIUM (violates the crate's own "programming error ⇒ panic" policy).**
 Files: `src/env.rs:286-289` (`EnvHandle::timeout`), `src/executor/mod.rs:46-50` (`schedule_wakeup`).
@@ -249,7 +249,7 @@ Fix per the error strategy (SPEC §3: wrong API use panics):
 - Tests: `#[should_panic]` for negative and NaN delays; keep `zero_delay_timeout` green.
 - Document the panic in `timeout()` rustdoc (`# Panics` section) and API.md.
 
-## F4. `ScheduledWaker::Ord` silently tolerates NaN, breaking heap invariants — **OPEN**
+## F4. `ScheduledWaker::Ord` silently tolerates NaN, breaking heap invariants — **FIXED (verified)**
 
 **Severity: LOW (latent; unreachable once F3 lands, but unsound by construction).**
 File: `src/executor/queue.rs:28-35`. **Model: Sonnet (bundle with F3).**
@@ -260,7 +260,7 @@ violates `Ord`'s transitivity/totality contract and can corrupt `BinaryHeap` ord
 `unwrap_or(Equal)` with `f64::total_cmp` — it is total, correct for all finite values, and removes
 the hidden NaN policy entirely. One-line change + keep existing unit tests.
 
-## F5. `Container` accepts un-satisfiable requests (`amount > capacity`) that block the queue forever — **OPEN**
+## F5. `Container` accepts un-satisfiable requests (`amount > capacity`) that block the queue forever — **FIXED (verified)**
 
 **Severity: LOW-MEDIUM.** File: `src/resource/container.rs:206-234`. **Model: Sonnet.**
 
@@ -271,7 +271,7 @@ add `assert!(amount <= capacity)` in `put`/`get` (message naming the amount and 
 document under `# Panics`, add two `#[should_panic]` tests, and mention in API.md. (SimPy also
 blocks forever here; diverging is deliberate and should be noted in the SimPy-parity docs.)
 
-## F6. Dropping an unfired `EventTrigger` silently strands waiters — document — **OPEN**
+## F6. Dropping an unfired `EventTrigger` silently strands waiters — document — **FIXED (docs, verified)**
 
 **Severity: LOW (doc gap, defensible behaviour).** File: `src/event.rs`. **Model: Sonnet.**
 
@@ -286,7 +286,7 @@ documenting is enough.
 
 # Part 2 — Executor performance / robustness
 
-## P1. A fresh `Waker` is allocated per process per poll, defeating every `will_wake` dedup — **OPEN**
+## P1. A fresh `Waker` is allocated per process per poll, defeating every `will_wake` dedup — **FIXED (empirically verified)**
 
 **Severity: MEDIUM (perf + memory growth on hot paths).** Files: `src/env.rs:225`
 (`make_waker` inside the poll loop), `src/event.rs:70`, `src/process.rs:44`.
@@ -309,7 +309,7 @@ Fix: store one `Waker` per process, created at spawn time, in the process table 
 one per process lifetime. Gate with the Criterion suite (`event_broadcast` and `mixed_workload`
 are the sensitive groups; expect neutral-to-positive movement).
 
-## P2. Process table churn: `HashMap` remove/re-insert on every poll — **OPEN**
+## P2. Process table churn: `HashMap` remove/re-insert on every poll — **FIXED (verified)**
 
 **Severity: LOW-MEDIUM (perf only; carried over from the 2026-06-08 review §4).**
 File: `src/env.rs:210-237`, `src/executor/mod.rs:25`. **Model: Sonnet** (with this spec; do it
@@ -323,7 +323,7 @@ slot writes. Keep `pending_spawns` as is. Verify with `timeout_throughput` (100k
 `mixed_workload` (10k) benches; document the memory trade-off (completed processes leave a `None`
 slot for the run's duration — fine for simulation lifetimes, note it in a comment).
 
-## P3. `poll_ready` may poll a stale id — verified benign, add a comment — **OPEN (trivial)**
+## P3. `poll_ready` may poll a stale id — verified benign, add a comment — **FIXED (comment)**
 
 **Severity: INFO.** File: `src/env.rs:221-235`. **Model: Sonnet.**
 
@@ -338,7 +338,7 @@ it becomes an explicit `if let Some(slot)` invariant in the `Vec` design.
 These are breaking or surface-shaping changes. The release in `PUBLISHING.md` freezes the API at
 `0.1.0`; this is the cheapest moment they will ever have.
 
-## A1. No crate-level rustdoc — docs.rs landing page will be empty — **OPEN**
+## A1. No crate-level rustdoc — docs.rs landing page will be empty — **FIXED (verified)**
 
 **Severity: HIGH for the release.** File: `src/lib.rs`. **Model: Sonnet.**
 
@@ -350,7 +350,7 @@ core-types table, the `!Send`/Monte-Carlo model in two sentences, and links to t
 Also add `#![warn(missing_docs)]` (warn, not deny, to keep CI friction low) and fix whatever it
 flags — most items are already documented.
 
-## A2. Public module paths create a double API surface — **OPEN**
+## A2. Public module paths create a double API surface — **FIXED (verified)**
 
 **Severity: MEDIUM (breaking change; carried over from 2026-06-08 §6).** Files: `src/lib.rs`,
 `README.md`, `tests/*`, `benches/simulation.rs`. **Model: Sonnet.**
@@ -363,7 +363,7 @@ are namespaces: `rng::sample`, `monte_carlo::run`). Update README/tests/benches 
 (`simu::env::SimEnv` → `simu::SimEnv`). Compile-fail fallout is the review: anything that breaks
 outside the crate was an accidental exposure.
 
-## A3. Four doc-examples are ```ignore``` and can silently rot — **OPEN**
+## A3. Four doc-examples are ```ignore``` and can silently rot — **FIXED (verified; 0 ignored)**
 
 **Severity: LOW.** Files: `src/combinator.rs:106,124`, `src/env.rs:276`,
 `src/resource/preemptive.rs:18`. **Model: Sonnet.**
@@ -399,7 +399,7 @@ Recommendation: upgrade to rand 0.9 **before** `0.1.0`. Scope: rewrite the `RngC
 calls, re-run the SplitMix64 known-answer tests (pure integer code — must not change) and the SimPy
 parity harness. If deferred instead, record the decision in PUBLISHING.md as a known post-1.0 break.
 
-## A5. `monte_carlo::run` demands `'static + Arc` where scoped threads need neither — **OPEN**
+## A5. `monte_carlo::run` demands `'static + Arc` where scoped threads need neither — **FIXED (verified with borrow test)**
 
 **Severity: LOW (ergonomics).** File: `src/monte_carlo.rs`. **Model: Sonnet.**
 
@@ -410,7 +410,7 @@ bounds on both backends (drop `R: 'static` too), keep panic-propagation semantic
 threads before unwinding — verify the "first panic payload" contract still holds and keep the
 existing test). Purely widening, non-breaking.
 
-## A6. No queue introspection on resources — **OPEN**
+## A6. No queue introspection on resources — **FIXED (verified)**
 
 **Severity: LOW (API gap vs SimPy).** Files: `src/resource/*.rs`. **Model: Sonnet.**
 
@@ -419,7 +419,7 @@ wait statistics. Add `queue_len(&self) -> usize` (count of non-canceled waiters)
 `PriorityResource`, `PreemptiveResource` (delegating to a new `WaitQueue::live_waiters()`), and
 `Container::get_queue_len()`/`put_queue_len()`. Trivial, additive, and makes the examples cleaner.
 
-## A7. Assorted API polish — **OPEN**
+## A7. Assorted API polish — **FIXED (Priority newtype ACK)**
 
 **Model: Sonnet** (all items). Each is small; batch them:
 
@@ -438,7 +438,7 @@ wait statistics. Add `queue_len(&self) -> usize` (count of non-canceled waiters)
 
 # Part 4 — Documentation
 
-## D1. SPEC.md contradicts the implementation in two places — **OPEN**
+## D1. SPEC.md contradicts the implementation in two places — **FIXED (verified)**
 
 **Model: Sonnet.** File: `SPEC.md`.
 
@@ -450,7 +450,7 @@ wait statistics. Add `queue_len(&self) -> usize` (count of non-canceled waiters)
   and documented earlier in the same file. Reword §9 to reference the current state ("delivered
   post-MVP: …; still out of scope: `Store`/`FilterStore`, …").
 
-## D2. TESTING.md rot — **OPEN**
+## D2. TESTING.md rot — **FIXED (verified)**
 
 **Model: Sonnet.** File: `TESTING.md`.
 
@@ -463,7 +463,7 @@ wait statistics. Add `queue_len(&self) -> usize` (count of non-canceled waiters)
   replace the per-file table with just the command and the headline number.
 - After F1-F5 land, the counts (86+17) and file lists need refreshing anyway — do it in the same PR.
 
-## D3. README issues — **OPEN**
+## D3. README issues — **FIXED (verified)**
 
 **Model: Sonnet.** File: `README.md`.
 
@@ -475,7 +475,7 @@ wait statistics. Add `queue_len(&self) -> usize` (count of non-canceled waiters)
   `simu-des = "0.1"` with a note that the import path stays `use simu::…` (already specified in
   `PUBLISHING.md` §4; just don't forget the README is the file it edits).
 
-## D4. MSRV: `PUBLISHING.md` suggests \~1.75, but the code requires ≥ 1.82 — **OPEN**
+## D4. MSRV: `PUBLISHING.md` suggests \~1.75, but the code requires ≥ 1.82 — **FIXED (verified)**
 
 **Severity: MEDIUM (would fail `cargo publish` verification builds downstream).**
 **Model: Sonnet.** Files: `PUBLISHING.md`, later `Cargo.toml`.
@@ -487,7 +487,7 @@ plan's placeholder "declare something safe like 1.75" is therefore wrong. Either
 fine). Update `PUBLISHING.md` now so the wrong number doesn't get executed later; verify with
 `cargo +1.82 build` (or `cargo msrv find`) before publishing.
 
-## D5. Behaviour notes worth one sentence each — **OPEN**
+## D5. Behaviour notes worth one sentence each — **FIXED (verified)**
 
 **Model: Sonnet.** Bundle with the fixes that touch the same files:
 
@@ -506,13 +506,13 @@ fine). Update `PUBLISHING.md` now so the wrong number doesn't get executed later
 Current coverage is genuinely strong (drop-safety, cancellation, cascade chains, cross-language
 KATs). Gaps found:
 
-## T1. Regression tests for every Part-1 finding — **OPEN**
+## T1. Regression tests for every Part-1 finding — **FIXED (with F1)**
 
 **Model:** same model as the corresponding fix (the F1 suite is **Opus**, the rest **Sonnet**).
 Enumerated inside F1-F5; the F1 same-batch race deserves a dedicated
 `tests/same_tick_races.rs` covering all three unit resources plus the granted-then-dropped case.
 
-## T2. Adversarial-scheduling test family — **OPEN**
+## T2. Adversarial-scheduling test family — **FIXED (verified)**
 
 **Severity: MEDIUM.** **Model: Opus** (designing the interleavings is the hard part; a good
 follow-on for whoever fixes F1).
@@ -525,7 +525,7 @@ release-then-request, request-then-release, double-release-two-waiters, preempt-
 as a stretch goal (dev-dependency only) — DES executors earn their keep under exactly these
 schedules.
 
-## T3. Bench coverage gaps — **OPEN (low)**
+## T3. Bench coverage gaps — **FIXED (verified)**
 
 **Model: Sonnet.** File: `benches/simulation.rs`.
 
@@ -535,7 +535,7 @@ algorithmically interesting primitives (heap ordering, victim scan, cascade). Ad
 triggers). Needed to gate the F1/P1/P2 changes with data. Also fix the stale "VecDeque" comment
 (D2) while in the file.
 
-## T4. `monte_carlo` panic-propagation test exists? — verified gap — **OPEN (low)**
+## T4. `monte_carlo` panic-propagation test exists? — verified gap — **FIXED (both backends)**
 
 **Model: Sonnet.** `tests/system.rs::monte_carlo_run` covers ordering but no test asserts the
 documented panic re-raise contract (worker panics → `resume_unwind` on caller after all joins).
@@ -549,7 +549,7 @@ Add one `#[should_panic]` test (and one for the rayon backend under
 The three examples are a genuine strength — realistic, cross-referenced walkthrough docs, each
 exercising a distinct primitive set. Only small issues:
 
-## E1. `hospital`: `ed_cleared_at` silently reports the safety-net deadline — **OPEN (low)**
+## E1. `hospital`: `ed_cleared_at` silently reports the safety-net deadline — **FIXED (hospital + warehouse)**
 
 **Model: Sonnet.** File: `examples/hospital.rs:143-151`.
 
@@ -560,7 +560,7 @@ arm won (compare `env.now()` to the deadline) and either log "ED NOT cleared (de
 the stat as such, or expose it as `Option<f64>` in `SimResult`. Same pattern exists in
 `warehouse.rs`'s stream joins — check it too.
 
-## E2. Example-level nits — **OPEN (low)**
+## E2. Example-level nits — **PARTIAL (rest ACK, cosmetic)**
 
 **Model: Sonnet.**
 
