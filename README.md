@@ -16,6 +16,17 @@ For full technical details — architecture, API design, resource model, and roa
 For the implementation roadmap and feature status — see [PLAN.md](PLAN.md).  
 For test strategy, coverage, and benchmark groups — see [TESTING.md](TESTING.md).
 
+## Installation
+
+```toml
+[dependencies]
+simu-des = "0.1"
+```
+
+The crate is published as `simu-des` (the crates.io name `simu` was taken) but
+the library target is named `simu`, so it is imported as `use simu::…` — exactly
+as in the examples below.
+
 ## Quick start
 
 ```rust

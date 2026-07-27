@@ -3,10 +3,32 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [package]
-name = "simu"
+# crates.io package is `simu-des` (the name `simu` is taken); the library
+# target below stays `simu`, so users depend on simu-des but `use simu::…`.
+name = "simu-des"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+description = "Discrete-event simulation for Rust, inspired by SimPy — single-threaded async executor, resources, and Monte Carlo parallelism."
+repository = "https://github.com/chkhm/simu"
+homepage = "https://github.com/chkhm/simu"
+readme = "README.md"
+keywords = ["simulation", "discrete-event", "des", "simpy", "monte-carlo"]
+categories = ["simulation", "science", "concurrency"]
+authors = ["Christoph Kuhmuench <christoph.kuhmuench@gmail.com>"]
+rust-version = "1.82"
+# Keep the published tarball lean — compare/ alone is ~147 MB.
+exclude = [
+    "compare/",
+    "reviews/",
+    ".github/",
+    "target/",
+    ".claude/",
+    "PLAN.md",
+    "TESTING.md",
+    "CLAUDE.md",
+    "PUBLISHING.md",
+]
 
 [lib]
 name = "simu"
