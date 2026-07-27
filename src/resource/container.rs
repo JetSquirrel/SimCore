@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+//! Continuous-quantity reservoir.
+//!
+//! [`Container`] models tanks, silos, batteries, stockpiles — anything
+//! measured in amounts rather than discrete units. `put(amount)` /
+//! `get(amount)` suspend when they cannot complete, with strict head-of-line
+//! FIFO waiters on both sides.
+
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::future::Future;
@@ -146,6 +153,35 @@ fn trigger_cascade(state: &mut ContainerState) {
 /// blocked head-of-queue request therefore holds the line for everyone behind
 /// it (matching SimPy's `Container`). All clones share the same internal state
 /// (cheap `Rc` clone). `Container` is `!Send + !Sync`, consistent with `SimEnv`.
+///
+/// A fuel tank: the car needs more than is in stock, so it waits for the
+/// tanker truck's delivery:
+///
+/// ```
+/// use simu::{SimEnv, Container};
+///
+/// let mut env = SimEnv::with_seed(0);
+/// let tank = Container::new(100.0, 20.0); // capacity 100, starts at 20
+///
+/// // A truck delivers 80 units at t = 5.
+/// let h = env.handle();
+/// let t = tank.clone();
+/// env.spawn(async move {
+///     h.timeout(5.0).await;
+///     t.put(80.0).await; // fits (20 + 80 ≤ 100), resolves immediately
+/// });
+///
+/// // A car wants 50 units — more than the current level, so it suspends.
+/// let h2 = env.handle();
+/// let t2 = tank.clone();
+/// env.spawn(async move {
+///     t2.get(50.0).await; // woken by the delivery
+///     assert_eq!(h2.now(), 5.0);
+/// });
+///
+/// env.run();
+/// assert_eq!(tank.level(), 50.0); // 20 + 80 − 50
+/// ```
 #[derive(Clone)]
 pub struct Container {
     state: Rc<RefCell<ContainerState>>,

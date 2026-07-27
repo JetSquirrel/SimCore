@@ -17,18 +17,24 @@ match a `REUSE.toml` glob.
 Companion docs:
 
 - `SPEC.md` — the design source of truth (architecture, API contracts, invariants, roadmap).
-- `API.md` — public API reference.
+- `API.md` — signature cheat-sheet only; semantics live in rustdoc (docs.rs).
 - `PLAN.md` — implementation plan / history.
 - `TESTING.md` — test strategy and coverage notes.
 - `README.md` — user-facing overview.
+- `llms.txt` + `docs/simu-for-agents.md` — LLM-facing reference and drop-in agent
+  context. **Rule: every code pattern in these files must be a verbatim copy of a
+  doc-test** (tutorial chapter or type doc) — never hand-write parallel snippets.
+- `src/tutorial.rs` — doc-only "simu in 10 minutes" module (5 chapters, all
+  doc-tests); each chapter has a runnable `examples/intro_*.rs` twin.
 
-When changing behaviour, keep `SPEC.md` and `API.md` in sync.
+When changing behaviour, keep `SPEC.md` and `API.md` in sync — and when changing
+tutorial/type doc-tests, re-sync the copies in `llms.txt` / `docs/simu-for-agents.md`.
 
 ## Commands
 
 ```bash
 cargo build
-cargo test                        # 133 passing tests across unit + integration suites (+7 doc-tests)
+cargo test                        # 145 passing tests (126 unit + integration, 19 doc-tests)
 cargo test <test_name>            # run a single test
 cargo run --example hospital      # ER patient-flow simulation
 cargo run --example brewery       # brewery / process-automation simulation
@@ -55,13 +61,18 @@ simu/
 │   ├── process.rs        # ProcessHandle<T>, spawn_with_handle
 │   ├── monte_carlo.rs    # monte_carlo::run — std::thread (default) or rayon (monte-carlo feature)
 │   ├── rng.rs            # RandomSource trait, portable SplitMix64 feed, sample:: transforms
+│   ├── tutorial.rs       # doc-only "simu in 10 minutes" (5 chapters, all doc-tests)
 │   └── resource/
 │       ├── mod.rs        # Resource, ResourceRequest, ResourceGuard (FIFO)
 │       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared direct-handoff waiter bookkeeping
 │       ├── priority.rs   # PriorityResource (priority heap, FIFO within a level)
 │       ├── container.rs  # Container (continuous quantity, FIFO put/get)
 │       └── preemptive.rs # PreemptiveResource — priority pool with cooperative-at-yield preemption
+├── llms.txt              # LLM-facing single-file reference (patterns copied from doc-tests)
+├── docs/
+│   └── simu-for-agents.md # drop-in agent-context file for downstream users
 ├── examples/
+│   ├── intro_*.rs        # 4 beginner examples, one per tutorial chapter (<60 lines each)
 │   ├── hospital.rs  / hospital.md
 │   ├── brewery.rs   / brewery.md
 │   ├── warehouse.rs / warehouse.md

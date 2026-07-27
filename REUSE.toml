@@ -13,6 +13,7 @@ path = [
     "compare/.gitignore",
     "Cargo.lock",
     "compare/requirements.txt",
+    "llms.txt",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>"

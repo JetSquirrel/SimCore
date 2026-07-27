@@ -43,6 +43,22 @@
 /// thread via [`std::panic::resume_unwind`], preserving the original backtrace.
 /// With the default backend, surviving threads are still joined before the
 /// re-raise, so no threads are orphaned.
+///
+/// # Example
+///
+/// ```
+/// use simu::{SimEnv, monte_carlo};
+///
+/// // Eight independent replications; each thread builds its own SimEnv.
+/// let end_times = monte_carlo::run(0..8u64, |seed| {
+///     let mut env = SimEnv::with_seed(seed);
+///     let h = env.handle();
+///     env.spawn(async move { h.timeout(1.0).await; });
+///     env.run();
+///     env.now()
+/// });
+/// assert_eq!(end_times, vec![1.0; 8]); // results in seed order
+/// ```
 pub fn run<F, R>(seeds: impl IntoIterator<Item = u64>, f: F) -> Vec<R>
 where
     F: Fn(u64) -> R + Send + Sync,

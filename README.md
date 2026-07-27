@@ -12,9 +12,11 @@ A Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy b
   portable `SplitMix64` generator that can be re-implemented in another language for exact cross-engine comparison
 - Monte Carlo parallelism across independent simulation runs using OS threads
 
-For full technical details — architecture, API design, resource model, and roadmap — see [SPEC.md](SPEC.md).  
-For the implementation roadmap and feature status — see [PLAN.md](PLAN.md).  
-For test strategy, coverage, and benchmark groups — see [TESTING.md](TESTING.md).
+**New to simu?** Start with the [`tutorial` module](https://docs.rs/simu-des) —
+five short chapters modeled on SimPy's "SimPy in 10 minutes", every snippet a
+running doc-test — and its four sub-60-line companion examples
+(`cargo run --example intro_car`, `intro_charging`, `intro_cancellation`,
+`intro_charging_station`). A signature cheat-sheet lives in [API.md](API.md).
 
 ## Installation
 
@@ -48,26 +50,25 @@ for i in 1..=3_u32 {
 env.run();  // prints: job 1 done at 2, job 2 done at 4, job 3 done at 6
 ```
 
-## Usage
-
-Add `simu` to your `Cargo.toml`. Until the crate is published it is a path (or git)
-dependency; once released on crates.io the package is named `simu-des` (the `simu`
-name was taken) while the import path stays `use simu::…`:
-
-```toml
-[dependencies]
-simu = { path = "." }
-# after publication:
-# simu-des = "0.1"   # still `use simu::...` in code
-```
-
 `monte_carlo::run` works out of the box (one `std::thread` per seed). For large seed counts, enable
 the optional feature to run on rayon's bounded thread pool instead:
 
 ```toml
 [dependencies]
-simu = { path = ".", features = ["monte-carlo"] }
+simu-des = { version = "0.1", features = ["monte-carlo"] }
 ```
+
+## Using simu with AI assistants
+
+The repository ships two LLM-oriented files, kept in sync with the crate's
+compile-checked doc-tests:
+
+- [`llms.txt`](llms.txt) — a complete single-file reference: signatures, canonical
+  patterns, a **SimPy → simu translation table**, and anti-patterns with their
+  symptoms.
+- [`docs/simu-for-agents.md`](docs/simu-for-agents.md) — a compact version designed
+  to be dropped into your own project's agent context (CLAUDE.md, cursor rules, …)
+  when you build simulations with simu.
 
 ## Core primitives
 
@@ -119,7 +120,11 @@ cargo clippy -- -D warnings
 
 ## Examples
 
-Three end-to-end examples demonstrate every public primitive in different domains. All run 10
+Start with the four **intro examples** (one per tutorial chapter, each under 60
+lines): `intro_car`, `intro_charging`, `intro_cancellation`,
+`intro_charging_station`.
+
+Beyond those, three end-to-end examples demonstrate every public primitive in different domains. All run 10
 parallel Monte Carlo simulations, write per-run logs, and print a summary table to stdout.
 See [`examples/hospital.md`](examples/hospital.md), [`examples/brewery.md`](examples/brewery.md),
 and [`examples/warehouse.md`](examples/warehouse.md) for full walkthroughs (sequence diagrams,
@@ -150,7 +155,8 @@ A distribution center from the logistics / material-handling domain: inbound tru
 putaway) and outbound orders (pick → pack → load) share one small forklift fleet. The fleet is a
 `PreemptiveResource` — urgent truck-side work evicts a routine putaway, whose driver parks the
 pallet and finishes it later. The first example to exercise `PreemptiveResource`. Logs to
-`target/sim-logs/warehouse_run_<N>.log`.
+`target/sim-logs/warehouse_run_<N>.log`. A browser-based visualizer for its runs lives in
+[`examples/warehouse-viz/`](examples/warehouse-viz/).
 
 ## SimPy parity
 
@@ -176,6 +182,14 @@ See [`compare/README.md`](compare/README.md) for methodology and
 [`compare/REPORT.md`](compare/REPORT.md) for the latest results. On the queue
 models simu runs ~10× faster at ~13× lower memory; the `Container` strict-FIFO
 divergence the harness originally surfaced is now fixed.
+
+## For contributors
+
+Internal design docs, aimed at people changing the library itself:
+
+- [SPEC.md](SPEC.md) — architecture, API contracts, invariants, and roadmap (the design source of truth).
+- [PLAN.md](PLAN.md) — implementation plan and history.
+- [TESTING.md](TESTING.md) — test strategy, coverage, and benchmark groups.
 
 ## License
 

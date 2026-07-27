@@ -13,6 +13,13 @@
 //! `(time, insertion)` so a run is fully deterministic given the same seed and
 //! logic.
 //!
+//! **New to simu? Start with the [`tutorial`] module** — five short chapters
+//! modeled on SimPy's "SimPy in 10 minutes", every snippet a running doc-test.
+//!
+//! The crates.io package is named **`simu-des`** (the name `simu` was taken)
+//! but the library target is `simu`: depend on `simu-des = "0.1"` and write
+//! `use simu::…` exactly as in the examples here.
+//!
 //! # Quick start
 //!
 //! ```
@@ -63,9 +70,17 @@
 //! the portable [`SplitMix64`] feed, whose stream and the [`rng::sample`]
 //! transforms are mirrored in Python for exact SimPy comparison.
 //!
+//! # Feature flags
+//!
+//! | Feature | Default | Effect |
+//! |---------|---------|--------|
+//! | `monte-carlo` | off | Switches [`monte_carlo::run`] from one-`std::thread`-per-seed to rayon's bounded work-stealing pool — preferable for hundreds or thousands of seeds. |
+//!
 //! # Examples
 //!
-//! Three end-to-end models ship in `examples/`: `hospital` (priority triage +
+//! Four beginner examples (`intro_car`, `intro_charging`, `intro_cancellation`,
+//! `intro_charging_station`) accompany the [`tutorial`] chapters. Three
+//! end-to-end models combine everything: `hospital` (priority triage +
 //! bed eviction + blood-bank `Container`), `brewery` (a bio-reactor production
 //! line), and `warehouse` (a forklift fleet exercising [`PreemptiveResource`]).
 
@@ -79,6 +94,7 @@ mod process;
 mod resource;
 pub mod rng;
 mod timeout;
+pub mod tutorial;
 
 pub use combinator::{AllOf, AnyOf};
 pub use env::{EnvHandle, SimEnv};

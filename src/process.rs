@@ -30,6 +30,24 @@ struct ProcessSlot<T> {
 ///
 /// Dropping the handle before awaiting detaches the process — it continues to
 /// run; its return value, if any, is dropped when the process completes.
+///
+/// ```
+/// use simu::SimEnv;
+///
+/// let mut env = SimEnv::with_seed(0);
+/// let h = env.handle();
+/// env.spawn(async move {
+///     let hc = h.clone();
+///     let child = h.spawn(async move {
+///         hc.timeout(3.0).await;
+///         "charged" // the child's return value
+///     });
+///     let result = child.await; // suspend until the child finishes
+///     assert_eq!(result, "charged");
+///     assert_eq!(h.now(), 3.0);
+/// });
+/// env.run();
+/// ```
 pub struct ProcessHandle<T> {
     slot: Rc<RefCell<ProcessSlot<T>>>,
 }

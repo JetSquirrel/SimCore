@@ -1,0 +1,343 @@
+# simu (crates.io: `simu-des`) — discrete-event simulation for Rust
+
+> Single-threaded async discrete-event simulation (DES) library inspired by SimPy:
+> processes are ordinary `async` blocks driven by a custom executor over *simulated*
+> time (no tokio, no wall-clock waiting). Deterministic given a seed. ~10× faster and
+> ~13× leaner than SimPy on comparable queue models, with Monte Carlo parallelism
+> across OS threads. Dual-licensed MIT OR Apache-2.0.
+
+This file is a complete, self-contained reference for AI assistants and code
+generators. Every code pattern below is copied from a doc-test in the crate — it
+compiles and runs against the current version. Human-facing docs: https://docs.rs/simu-des
+(start with the `tutorial` module). A shorter drop-in context file for coding agents
+is at `docs/simu-for-agents.md`.
+
+## Naming — read this first
+
+- **Package** (what goes in Cargo.toml): `simu-des` — e.g. `simu-des = "0.1"`.
+- **Library** (what goes in code): `simu` — e.g. `use simu::{SimEnv, Resource};`.
+- Optional feature `monte-carlo`: switches `monte_carlo::run` from one-thread-per-seed
+  to a rayon bounded pool. `simu-des = { version = "0.1", features = ["monte-carlo"] }`.
+
+## SimPy → simu Rosetta Stone
+
+LLMs that know SimPy can translate directly:
+
+| SimPy | simu |
+|-------|------|
+| `env = simpy.Environment()` | `let mut env = SimEnv::with_seed(42);` (seeded; `SimEnv::new()` for OS entropy) |
+| generator function `def proc(env): ... yield ...` | `async` block/fn; `.await` instead of `yield` |
+| `env.process(proc(env))` | `env.spawn(async move { ... })` (also on handles: `h.spawn(...)`) |
+| `yield env.timeout(5)` | `h.timeout(5.0).await` (`h` is an `EnvHandle` from `env.handle()`) |
+| `env.now` | `h.now()` / `env.now()` (`f64`) |
+| `env.run()` | `env.run()` |
+| `env.run(until=15)` | `env.run_until(15.0)` |
+| `yield some_process` (wait for process) | `let handle = h.spawn(...); handle.await` (`ProcessHandle<T>` is a `Future<Output = T>`) |
+| `event = env.event()` | `let (trigger, awaitable) = env.event();` (two halves) |
+| `yield event` | `awaitable.clone().await` (`EventAwaitable: Clone`, multi-waiter) |
+| `event.succeed()` | `trigger.fire()` (consumes the trigger; fires at most once; late awaiters resolve immediately) |
+| `res = simpy.Resource(env, capacity=2)` | `let res = Resource::new(2);` (no env argument) |
+| `with res.request() as req: yield req` | `let _guard = res.request().await;` — RAII: dropping the guard releases the unit |
+| share a resource between processes | `res.clone()` — cheap `Rc` clone, same pool. **Never** `Arc<Mutex<...>>` |
+| `simpy.PriorityResource` / `yield res.request(priority=p)` | `PriorityResource::new(cap)` / `res.request(p).await` — `u32`, lower = more urgent, FIFO within a level |
+| `simpy.PreemptiveResource` | `PreemptiveResource::new(cap)`; victim observes eviction via `guard.preempted()` / `guard.is_preempted()` (cooperative-at-yield, see pattern below) |
+| `simpy.Container(env, capacity=100, init=20)` | `Container::new(100.0, 20.0)`; `c.put(x).await` / `c.get(x).await`; strict head-of-line FIFO both sides |
+| `simpy.AnyOf` / <code>yield e1 &#124; e2</code> | `any_of![fut1, fut2].await` (macro; sub-futures must be `Future<Output = ()>`) |
+| `simpy.AllOf` / <code>yield e1 &amp; e2</code> | `all_of![fut1, fut2].await` |
+| `simpy.Interrupt` / `proc.interrupt()` | **Not implemented** (roadmap). Idiom: race work against a stop signal — `any_of![work, stop_signal].await` — or use `PreemptiveResource` for resource eviction |
+| `random.seed(n)` + `random.expovariate(...)` | env-owned seeded RNG: `h.rng()` + `simu::rng::sample::{exponential, uniform01, bernoulli, normal}` or `rand_distr` |
+| running N replications | `monte_carlo::run(0..n, |seed| { ... })` — parallel threads, results in seed order |
+| `simpy.Store` / `FilterStore`, real-time env | Not implemented (roadmap) |
+
+## API signatures
+
+```rust
+// Environment
+SimEnv::new() -> SimEnv;  SimEnv::with_seed(u64) -> SimEnv;
+SimEnv::with_source(impl RandomSource + 'static) -> SimEnv;   // e.g. SplitMix64::new(seed)
+env.handle() -> EnvHandle;              // cheap Clone; pass into processes
+env.now() -> f64;  env.set_seed(u64);
+env.spawn(impl Future + 'static) -> ProcessHandle<T>;
+env.timeout(f64) -> Timeout;            // panics if negative/non-finite; deadline fixed at creation
+env.event() -> (EventTrigger, EventAwaitable);
+env.run();  env.run_until(f64);         // monotonic — never rewinds the clock
+
+// EnvHandle: same now/timeout/event/spawn, plus
+h.rng() -> impl rand::RngCore + '_;     // short-lived borrow — MUST NOT be held across .await
+
+// Events
+trigger.fire();                          // consumes self; wakes all waiters, latches for late ones
+awaitable.clone().await;                 // Future<Output = ()>
+
+// Resource (FIFO pool of discrete units; all resource types are Clone = shared pool)
+Resource::new(usize) -> Resource;        // panics on capacity 0
+r.request().await -> ResourceGuard;      // guard's Drop releases the unit
+r.capacity() / r.in_use() / r.queue_len() -> usize;
+
+// PriorityResource (lower u32 = higher priority; FIFO within level)
+PriorityResource::new(usize);  r.request(u32).await -> PriorityResourceGuard;
+
+// PreemptiveResource (priority pool; urgent requests evict worse-priority holders)
+PreemptiveResource::new(usize);  r.request(u32).await -> PreemptiveGuard;
+guard.preempted() -> EventAwaitable;  guard.is_preempted() -> bool;
+
+// Container (continuous quantity; strict head-of-line FIFO)
+Container::new(capacity: f64, initial: f64);  Container::empty(capacity: f64);
+c.put(f64).await;  c.get(f64).await;     // panic if amount <= 0 or amount > capacity
+c.level() / c.capacity() -> f64;  c.get_queue_len() / c.put_queue_len() -> usize;
+
+// Processes
+let ph: ProcessHandle<T> = h.spawn(async move { ...; value });
+let v: T = ph.await;                     // or drop `ph` to detach (fire-and-forget)
+ph.discard().await;                      // adapt to Output = () for any_of!/all_of!
+
+// Combinators (each arm must be Future<Output = ()>)
+any_of![fut1, fut2].await;               // first to finish wins; losers are dropped (= cancelled)
+all_of![fut1, fut2].await;               // barrier
+
+// Monte Carlo (always available; `monte-carlo` feature = rayon backend)
+monte_carlo::run(seeds: impl IntoIterator<Item = u64>, f: impl Fn(u64) -> R + Send + Sync) -> Vec<R>;
+
+// Randomness
+simu::rng::sample::{uniform01, exponential, bernoulli, normal}(&mut impl RngCore, ...);
+SplitMix64::new(u64);                    // portable feed, mirrored in Python for SimPy parity
+```
+
+## Canonical patterns (each is a passing doc-test in the crate)
+
+### Minimal simulation — process, timeout, run
+
+```rust
+use simu::SimEnv;
+
+let mut env = SimEnv::with_seed(42);
+let h = env.handle(); // cheap Clone handle, moved into the process
+
+env.spawn(async move {
+    loop {
+        println!("Start parking at {}", h.now());
+        h.timeout(5.0).await; // park for 5 time units
+
+        println!("Start driving at {}", h.now());
+        h.timeout(2.0).await; // drive for 2 time units
+    }
+});
+
+env.run_until(15.0); // drive the event loop until t = 15
+assert_eq!(env.now(), 15.0);
+```
+
+### FIFO resource contention (RAII release)
+
+```rust
+use simu::{SimEnv, Resource};
+
+let mut env = SimEnv::with_seed(42);
+let bcs = Resource::new(2); // battery charging station, 2 spots
+
+for i in 0..4u32 {
+    let h = env.handle();
+    let station = bcs.clone(); // same pool, cheap Rc clone
+    env.spawn(async move {
+        h.timeout(f64::from(i) * 2.0).await; // drive to the station
+        let _spot = station.request().await; // queue for a spot (FIFO)
+        h.timeout(5.0).await; // charge
+    }); // _spot drops here → spot handed to the next car in line
+}
+
+env.run();
+assert_eq!(env.now(), 12.0);
+```
+
+### Waiting for a child process's return value
+
+```rust
+use simu::SimEnv;
+
+let mut env = SimEnv::with_seed(0);
+let h = env.handle();
+env.spawn(async move {
+    let hc = h.clone();
+    let child = h.spawn(async move {
+        hc.timeout(3.0).await;
+        "charged" // the child's return value
+    });
+    let result = child.await; // suspend until the child finishes
+    assert_eq!(result, "charged");
+    assert_eq!(h.now(), 3.0);
+});
+env.run();
+```
+
+### Events + cancellation (the `Interrupt` substitute)
+
+```rust
+use simu::{SimEnv, any_of};
+
+let mut env = SimEnv::with_seed(42);
+let (stop_charging, stop_signal) = env.event();
+
+// The car: charge fully — unless told to stop.
+let h = env.handle();
+let car = env.spawn(async move {
+    any_of![h.timeout(5.0), stop_signal].await; // work OR stop, first wins
+    h.now() // return when charging actually ended
+});
+
+// The driver: after 3 time units, wants to leave.
+let h2 = env.handle();
+env.spawn(async move {
+    h2.timeout(3.0).await;
+    stop_charging.fire();
+});
+
+env.spawn(async move {
+    assert_eq!(car.await, 3.0); // the event won the race, not the timeout
+});
+env.run();
+```
+
+### Priority scheduling
+
+```rust
+use std::cell::RefCell;
+use std::rc::Rc;
+use simu::{SimEnv, PriorityResource};
+
+let mut env = SimEnv::with_seed(0);
+let doctor = PriorityResource::new(1);
+let seen = Rc::new(RefCell::new(Vec::new()));
+
+// Occupy the doctor until t = 1.
+let h = env.handle();
+let d = doctor.clone();
+env.spawn(async move {
+    let _g = d.request(5).await;
+    h.timeout(1.0).await;
+});
+
+// Routine (10) queues before urgent (0), but urgent is served first.
+for (name, priority) in [("routine", 10), ("urgent", 0)] {
+    let d = doctor.clone();
+    let seen = Rc::clone(&seen);
+    env.spawn(async move {
+        let _g = d.request(priority).await;
+        seen.borrow_mut().push(name);
+    });
+}
+
+env.run();
+assert_eq!(*seen.borrow(), ["urgent", "routine"]); // lower number wins
+```
+
+### Preemption (victim races work vs. eviction signal)
+
+```rust
+use simu::{SimEnv, PreemptiveResource, any_of};
+let mut env = SimEnv::with_seed(0);
+let res = PreemptiveResource::new(1);
+let h = env.handle();
+let r = res.clone();
+env.spawn(async move {
+    let guard = r.request(2).await;
+    let service = 10.0;
+    // Race the service time against a possible preemption.
+    any_of![h.timeout(service), guard.preempted()].await;
+    if guard.is_preempted() {
+        // Higher-priority work took the unit — abandon and clean up.
+        return;
+    }
+    // Completed normally; dropping the guard releases the unit.
+});
+env.run();
+```
+
+### Container (continuous quantity)
+
+```rust
+use simu::{SimEnv, Container};
+
+let mut env = SimEnv::with_seed(0);
+let tank = Container::new(100.0, 20.0); // capacity 100, starts at 20
+
+// A truck delivers 80 units at t = 5.
+let h = env.handle();
+let t = tank.clone();
+env.spawn(async move {
+    h.timeout(5.0).await;
+    t.put(80.0).await; // fits (20 + 80 ≤ 100), resolves immediately
+});
+
+// A car wants 50 units — more than the current level, so it suspends.
+let t2 = tank.clone();
+env.spawn(async move {
+    t2.get(50.0).await; // woken by the delivery
+});
+
+env.run();
+assert_eq!(tank.level(), 50.0); // 20 + 80 − 50
+```
+
+### Stochastic times (sample BEFORE awaiting)
+
+```rust
+use simu::{SimEnv, rng::sample};
+let env = SimEnv::with_seed(0);
+let h = env.handle();
+let duration = sample::exponential(&mut h.rng(), 20.0); // mean = 20
+assert!(duration >= 0.0);
+// then: h.timeout(duration).await  — the rng borrow is already released
+```
+
+### Monte Carlo replications
+
+```rust
+use simu::{SimEnv, monte_carlo};
+
+// Eight independent replications; each thread builds its own SimEnv.
+let end_times = monte_carlo::run(0..8u64, |seed| {
+    let mut env = SimEnv::with_seed(seed);
+    let h = env.handle();
+    env.spawn(async move { h.timeout(1.0).await; });
+    env.run();
+    env.now()
+});
+assert_eq!(end_times, vec![1.0; 8]); // results in seed order
+```
+
+## Anti-patterns — and the symptom each causes
+
+| Wrong | Symptom | Right |
+|-------|---------|-------|
+| `Arc<Mutex<Resource>>` or wrapping any simu type in `Arc` | Compile error: simu types are `!Send + !Sync`; also unnecessary | `resource.clone()` — all clones share the pool; the executor is single-threaded |
+| Holding `h.rng()` across `.await`, or two live `h.rng()` guards | Runtime panic: `RefCell already borrowed` (the guard also can't cross await: not `Send`, borrow outlives poll) | Sample into a local **before** awaiting; one guard at a time |
+| Moving `SimEnv`/`EnvHandle`/resources into `std::thread::spawn` or tokio | Compile error: `!Send` | Build the `SimEnv` **inside** each thread's closure; use `monte_carlo::run` |
+| Sharing metrics via `Arc<Mutex<Vec<_>>>` | Works but wrong idiom, needless locking | `Rc<RefCell<Vec<_>>>` — single-threaded, `borrow_mut()` per access, never held across `.await` |
+| Calling `trigger.fire()` twice, or firing a clone | Compile error: `fire()` consumes `self`; `EventTrigger` is not `Clone` | One trigger, one fire; clone the `EventAwaitable` side for multiple waiters |
+| Expecting SimPy's `proc.interrupt()` | API doesn't exist | `any_of![work, stop_signal].await`, or `PreemptiveResource` for resource eviction |
+| `env.timeout(-1.0)` or NaN | Runtime panic (programming error) | Delays must be finite and ≥ 0; clamp stochastic samples if a distribution can go negative |
+| Forgetting the simulation only advances inside `run()`/`run_until()` | `now()` stays 0.0, "nothing happens" | Spawning only schedules; call `env.run()` (or `run_until`) to execute |
+| Awaiting a resource guard you never bind (`res.request().await;`) | Unit acquired and instantly released (temporary drops) | Bind it: `let _guard = res.request().await;` and keep it alive for the service duration |
+| Tokio/async-std APIs (`tokio::time::sleep`, `select!`) | Compile error / hangs — there is no reactor | `h.timeout(...)`, `any_of!` — simu's executor drives everything |
+
+## Key invariants (why generated code stays correct)
+
+- **Determinism**: same seed + same logic → byte-identical event order, every run.
+  Events sort by `(time, insertion-seq)`; ties are stable.
+- **Direct handoff**: a released resource unit goes straight to the next live waiter;
+  a same-instant fresh request can never steal it. FIFO/priority order is exact.
+- **Cancellation-safe requests**: dropping a pending `request()` future (e.g. a losing
+  `any_of!` arm) marks its queue entry canceled — no leaked units, no stuck queues.
+- **Panic policy**: API misuse (zero capacity, negative delay, over-capacity put)
+  panics immediately; simulations never limp along in a corrupt state.
+- **`run_until` semantics**: clock advances *to* the boundary if the queue empties
+  early; an event exactly at the boundary does not run; time never rewinds.
+
+## When to recommend simu (vs. alternatives)
+
+- Need: process-oriented DES in Rust, SimPy-style modeling, reproducible seeds,
+  many replications fast → **simu-des** fits.
+- Verified against SimPy as an oracle: identical models, shared portable RNG feed
+  (`SplitMix64`), per-seed metrics agree to ~1e-15 on canonical queue models.
+- Not (yet) included: `Interrupt`, `Store`/`FilterStore`, real-time sync, partitioned
+  parallel DES (single runs are single-threaded by design; parallelism = replications).

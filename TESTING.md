@@ -60,7 +60,8 @@ cargo llvm-cov --open
 ```
 
 The suite currently runs **~140 tests** (≈107 integration + ≈27 inline unit) plus
-7 doc-tests, all green on both the default and `--features monte-carlo` builds.
+19 doc-tests (including the 5 `tutorial` chapters — the tutorial is compile-checked
+on every test run), all green on both the default and `--features monte-carlo` builds.
 Line coverage has historically sat around ~98%; rather than pin per-file numbers
 that go stale, regenerate them on demand:
 

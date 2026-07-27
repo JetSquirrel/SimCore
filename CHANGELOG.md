@@ -43,4 +43,10 @@ Initial release, published as [`simu-des`](https://crates.io/crates/simu-des)
   `warehouse` (forklift preemption, with browser visualization).
 - SimPy-parity harness (`compare/`, repo only — excluded from the crate):
   queue models match SimPy seed-by-seed to ~1e-15 in exact mode.
-- Criterion benchmark suite; 133 tests across unit + integration suites.
+- Criterion benchmark suite; 126 tests across unit + integration suites
+  (145 including doc-tests).
+- **Documentation**: `simu::tutorial` — a "simu in 10 minutes" module modeled on
+  SimPy's intro (5 chapters, every snippet a doc-test) with four sub-60-line
+  `intro_*` examples; doc-examples on all core types (19 doc-tests total);
+  `llms.txt` + `docs/simu-for-agents.md` for AI coding assistants, including a
+  SimPy → simu translation table.

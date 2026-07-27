@@ -26,6 +26,22 @@ type SharedRng = Rc<RefCell<Box<dyn RandomSource>>>;
 /// `SimEnv` is `!Send + !Sync` (via `Rc`) and must live on one thread.
 /// For Monte Carlo parallelism, create independent `SimEnv` instances on
 /// separate threads.
+///
+/// The typical shape of every simulation: create the env, pass
+/// [`handle()`](SimEnv::handle) clones into spawned processes, run, read out
+/// results.
+///
+/// ```
+/// use simu::SimEnv;
+///
+/// let mut env = SimEnv::with_seed(1);
+/// let h = env.handle();
+/// env.spawn(async move {
+///     h.timeout(10.0).await; // suspend for 10 simulated time units
+/// });
+/// env.run(); // drive the event loop until the queue drains
+/// assert_eq!(env.now(), 10.0);
+/// ```
 pub struct SimEnv {
     state: Rc<RefCell<SimState>>,
     rng: SharedRng,

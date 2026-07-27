@@ -2,6 +2,13 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+//! Priority-scheduled resource pool.
+//!
+//! [`PriorityResource`] serves blocked waiters by priority level — lower
+//! number first, FIFO within a level. For a pool whose *holders* can be
+//! evicted by more urgent requests, see
+//! [`PreemptiveResource`](crate::PreemptiveResource).
+
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
@@ -28,6 +35,40 @@ use super::wait_queue::WaitQueue;
 /// `PriorityResource` wraps an `Rc<RefCell<>>` internally, so cloning is cheap
 /// and all clones share the same pool. It is `!Send + !Sync` — consistent with
 /// `SimEnv`.
+///
+/// An urgent case overtakes a routine one that queued first:
+///
+/// ```
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+/// use simu::{SimEnv, PriorityResource};
+///
+/// let mut env = SimEnv::with_seed(0);
+/// let doctor = PriorityResource::new(1);
+/// let seen = Rc::new(RefCell::new(Vec::new()));
+///
+/// // Occupy the doctor until t = 1.
+/// let h = env.handle();
+/// let d = doctor.clone();
+/// env.spawn(async move {
+///     let _g = d.request(5).await;
+///     h.timeout(1.0).await;
+/// });
+///
+/// // Two patients queue while the doctor is busy — routine (10) arrives
+/// // before urgent (0), but urgent is served first.
+/// for (name, priority) in [("routine", 10), ("urgent", 0)] {
+///     let d = doctor.clone();
+///     let seen = Rc::clone(&seen);
+///     env.spawn(async move {
+///         let _g = d.request(priority).await;
+///         seen.borrow_mut().push(name);
+///     });
+/// }
+///
+/// env.run();
+/// assert_eq!(*seen.borrow(), ["urgent", "routine"]); // lower number wins
+/// ```
 ///
 /// Internally this is a `WaitQueue<u32>` (a `pub(crate)` helper): the
 /// `u32` priority is the ordering key, and the queue's internal sequence
