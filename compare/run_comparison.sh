@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 # End-to-end simu-vs-SimPy comparison: build the Rust runner, set up a Python
 # venv, run the correctness + performance harnesses, and write compare/REPORT.md.
 #

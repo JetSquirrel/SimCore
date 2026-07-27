@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Two-class priority queue. SimPy twin of `compare --model priority`.
 
 Uses `simpy.PriorityResource` (lower priority value served first, matching

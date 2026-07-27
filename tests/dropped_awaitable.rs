@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Dropped-awaitable safety tests.
 //!
 //! When a process abandons a suspendable request before it resolves (e.g.,

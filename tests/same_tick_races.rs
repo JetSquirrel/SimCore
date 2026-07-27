@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Regression suite for Finding F1 (see `reviews/2026-07-01-implementation-review.md`):
 //! a woken wait-queue waiter must not be stranded — nor jumped in FIFO/priority
 //! order — by a *fresh* request that lands in the **same ready batch**.

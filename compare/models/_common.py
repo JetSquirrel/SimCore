@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Shared CLI parsing, JSON emission, and the per-seed driver loop.
 
 Every model script emits the *same* JSON contract that the Rust runner

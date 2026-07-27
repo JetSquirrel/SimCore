@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Shared result schema + subprocess runners for both tools.
 
 Both the Rust runner (`examples/compare`) and each SimPy model emit one JSON

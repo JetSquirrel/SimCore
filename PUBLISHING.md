@@ -48,11 +48,16 @@ Outcome: a publishable, well-presented `0.1.0` crate that installs as
     — keeps the published tarball lean. **Critical: `compare/` alone is ~147 MB**
     (Python parity harness) and must not ship in the crate.
 
-### 2. License files (new)
+### 2. License files — ✅ DONE (superseded by REUSE 3.3 compliance, 2026-07-27)
 
-- `LICENSE-MIT` — standard MIT text, copyright "2026 Christoph Kuhmuench".
-- `LICENSE-APACHE` — standard Apache-2.0 text.
-- (Optional) add a short "## License" section to `README.md` stating dual MIT/Apache-2.0.
+The repo is now [REUSE 3.3](https://reuse.software/spec-3.3)-compliant: canonical texts live in
+`LICENSES/MIT.txt` + `LICENSES/Apache-2.0.txt`, every file carries SPDX info (headers or
+`REUSE.toml`), `Cargo.toml` has `license = "MIT OR Apache-2.0"`, `README.md` has the dual-license
+section with contribution clause, and CI runs `reuse lint`.
+
+Remaining at publish time (optional): add root `LICENSE-MIT` / `LICENSE-APACHE` copies for the
+Rust-ecosystem convention and GitHub's license detector — REUSE ignores standard root license
+files, so this cannot break compliance.
 
 ### 3. `CHANGELOG.md` (new, optional but recommended)
 

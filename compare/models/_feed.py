@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Portable random feed — the Python twin of `simu::rng` (src/rng.rs).
 
 This is a byte-for-byte re-implementation of the SplitMix64 generator and the

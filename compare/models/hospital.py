@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Faithful SimPy port of the hospital model in examples/compare.rs.
 
 Mirrors the same parameters and the same statistical-comparison policy:
