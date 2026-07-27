@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Shared M/M/c queue model used by mm1.py (servers=1) and mmc.py.
 
 Mirrors `run_queue` in examples/compare.rs: Exp(lambda) inter-arrivals, Exp(mu)

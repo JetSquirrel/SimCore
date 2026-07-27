@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Correctness comparison: are simu and SimPy indistinguishable?
 
 Both tools now draw from the *same* portable feed (SplitMix64 + shared

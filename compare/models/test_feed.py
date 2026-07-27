@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Cross-language known-answer test for the portable feed.
 
 The literals below are the SAME values asserted by the Rust unit tests in

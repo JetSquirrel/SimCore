@@ -7,6 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `simu` is a Rust library for Discrete Event Simulation (DES), inspired by SimPy. The MVP is fully
 implemented and tested.
 
+Licensing: dual **MIT OR Apache-2.0**, [REUSE 3.3](https://reuse.software/spec-3.3)-compliant —
+license texts live in `LICENSES/`, every code file carries an SPDX header, prose/uncommentable
+files (`*.md`, `.gitignore`, `Cargo.lock`, `requirements.txt`) are covered by `REUSE.toml`, and CI
+enforces it (`reuse lint` job). New files must include the SPDX header (copy from any neighbor) or
+match a `REUSE.toml` glob.
+
 Companion docs:
 
 - `SPEC.md` — the design source of truth (architecture, API contracts, invariants, roadmap).

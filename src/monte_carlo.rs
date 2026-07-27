@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Monte Carlo helper: run a simulation closure once per seed, in parallel.
 //!
 //! Two backends are provided, selected at compile time:

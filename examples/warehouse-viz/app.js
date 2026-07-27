@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /* ===================================================================== *
  * app.js — load a warehouse JSONL run, reconstruct per-frame state from
  * the event stream, and drive the SVG Scene under full transport control.

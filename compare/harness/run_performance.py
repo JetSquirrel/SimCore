@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 """Performance comparison: wall-clock, events/sec, and peak memory.
 
 Each tool is launched as a subprocess so memory is measured identically via

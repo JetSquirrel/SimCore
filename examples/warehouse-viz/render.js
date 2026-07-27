@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 /* ===================================================================== *
  * render.js — builds the static SVG warehouse floor plan from a `meta`
  * line and updates it from a per-frame `state` object computed by app.js.

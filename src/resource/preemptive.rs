@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! `PreemptiveResource` — a priority resource whose in-use units can be
 //! *preempted* by a higher-priority request.
 //!

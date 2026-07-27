@@ -168,6 +168,15 @@ divergence the harness originally surfaced is now fixed.
 
 ## License
 
-Dual-licensed under **MIT OR Apache-2.0** (the Rust ecosystem convention). The
-`LICENSE-MIT` / `LICENSE-APACHE` files are added at publication — see
-[PUBLISHING.md](PUBLISHING.md).
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt))
+- MIT License ([LICENSES/MIT.txt](LICENSES/MIT.txt))
+
+at your option — the Rust ecosystem's standard dual license. The repository is
+[REUSE](https://reuse.software/)-compliant: every file carries SPDX licensing
+information, verified by `reuse lint` in CI.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

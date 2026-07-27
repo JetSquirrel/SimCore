@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! `simu` is a library for **discrete-event simulation** (DES), inspired by
 //! Python's [SimPy](https://simpy.readthedocs.io/) but built to be idiomatic
 //! Rust, fast, and reproducible.

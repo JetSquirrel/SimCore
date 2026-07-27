@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Christoph Kuhmuench <christoph.kuhmuench@gmail.com>
+#
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 name: CI
 
 on:
@@ -15,6 +19,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Every file must carry SPDX licensing info per REUSE 3.3 (see REUSE.toml
+  # and LICENSES/); fails PRs that add files without it.
+  reuse:
+    name: REUSE compliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fsfe/reuse-action@v5
+
   rust:
     name: Rust (build · test · clippy)
     runs-on: ubuntu-latest
