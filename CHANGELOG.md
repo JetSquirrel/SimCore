@@ -1,0 +1,46 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-07-27
+
+Initial release, published as [`simu-des`](https://crates.io/crates/simu-des)
+(imported as `use simu::…`).
+
+### Added
+
+- **Custom single-threaded async executor** per `SimEnv` — no tokio/async-std;
+  futures are polled on simulated time with deterministic `(time, seq)`
+  tie-breaking, so equal seeds give identical runs.
+- `SimEnv` / `EnvHandle` split: the env owns the event loop (`run` /
+  `run_until`); the cloneable handle gives processes `now`, `timeout`, `event`,
+  `spawn`, and `rng`.
+- `Timeout` future for simulated delays.
+- `EventTrigger` / `EventAwaitable` — manual inter-process signalling with
+  multi-waiter support and a fire-before-await latch.
+- Resources (all `Rc`-cloneable, no `Arc`/`Mutex` needed):
+  - `Resource` — FIFO-queued, capacity-limited pool with RAII `ResourceGuard`
+    release and direct-handoff semantics (a freed unit can never be stolen by a
+    same-tick fresh request).
+  - `PriorityResource` — priority-scheduled pool (lower number = higher
+    priority; FIFO within a level).
+  - `PreemptiveResource` — priority pool with cooperative-at-yield preemption
+    (`guard.preempted()` / `is_preempted()`).
+  - `Container` — reservoir of continuous quantity with strict head-of-line
+    FIFO `put` / `get`.
+- `ProcessHandle<T>` — observable spawn (tokio-`JoinHandle`-style): await the
+  value or drop to detach.
+- `AnyOf` / `AllOf` combinators with `any_of!` / `all_of!` macros.
+- Seeded, pluggable randomness: `RandomSource` trait (`SimEnv::with_source`),
+  default `StdRng`, portable `SplitMix64` feed, and shared closed-form
+  `sample::*` transforms.
+- `monte_carlo::run` — parallel replications on `std::thread` by default, or
+  rayon's bounded pool via the `monte-carlo` feature.
+- Examples: `hospital` (ER patient flow), `brewery` (process automation),
+  `warehouse` (forklift preemption, with browser visualization).
+- SimPy-parity harness (`compare/`, repo only — excluded from the crate):
+  queue models match SimPy seed-by-seed to ~1e-15 in exact mode.
+- Criterion benchmark suite; 133 tests across unit + integration suites.

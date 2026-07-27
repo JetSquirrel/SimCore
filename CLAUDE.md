@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 `simu` is a Rust library for Discrete Event Simulation (DES), inspired by SimPy. The MVP is fully
-implemented and tested.
+implemented and tested. The crates.io package is **`simu-des`** (the name `simu` was taken) with
+`[lib] name = "simu"`, so all code imports stay `use simu::…`.
 
 Licensing: dual **MIT OR Apache-2.0**, [REUSE 3.3](https://reuse.software/spec-3.3)-compliant —
 license texts live in `LICENSES/`, every code file carries an SPDX header, prose/uncommentable

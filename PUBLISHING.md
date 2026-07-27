@@ -26,7 +26,7 @@ Outcome: a publishable, well-presented `0.1.0` crate that installs as
 
 ## Changes
 
-### 1. `Cargo.toml` — package/lib name split + full metadata
+### 1. `Cargo.toml` — package/lib name split + full metadata — ✅ DONE (2026-07-27)
 
 - Set `name = "simu-des"` under `[package]`.
 - Add `[lib] name = "simu"` (keep existing `path = "src/lib.rs"`).
@@ -55,16 +55,16 @@ The repo is now [REUSE 3.3](https://reuse.software/spec-3.3)-compliant: canonica
 `REUSE.toml`), `Cargo.toml` has `license = "MIT OR Apache-2.0"`, `README.md` has the dual-license
 section with contribution clause, and CI runs `reuse lint`.
 
-Remaining at publish time (optional): add root `LICENSE-MIT` / `LICENSE-APACHE` copies for the
-Rust-ecosystem convention and GitHub's license detector — REUSE ignores standard root license
-files, so this cannot break compliance.
+Root `LICENSE-MIT` / `LICENSE-APACHE` copies (Rust-ecosystem convention, GitHub's license
+detector) were added 2026-07-27 alongside the crates.io metadata — REUSE ignores standard root
+license files, so compliance is unaffected (`reuse lint` re-verified).
 
-### 3. `CHANGELOG.md` (new, optional but recommended)
+### 3. `CHANGELOG.md` (new, optional but recommended) — ✅ DONE (2026-07-27)
 
 - Keep-a-Changelog style; a single `## [0.1.0]` entry summarizing the MVP feature set
   (pulled from `CLAUDE.md` Status section).
 
-### 4. README touch-ups (`README.md`)
+### 4. README touch-ups (`README.md`) — ✅ DONE (2026-07-27; badges deferred until the crate is live)
 
 - Add an install snippet:
   ```toml
