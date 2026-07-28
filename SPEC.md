@@ -674,6 +674,10 @@ Three end-to-end examples ship in `examples/`. Each runs 10 parallel Monte Carlo
 to stdout. The full walkthroughs (configuration, sequence diagrams, sample output) live in
 `examples/hospital.md`, `examples/brewery.md`, and `examples/warehouse.md`.
 
+They are complemented by four beginner-scale intro examples (`intro_car`, `intro_charging`,
+`intro_cancellation`, `intro_charging_station`), one per chapter of the `simu::tutorial` module —
+each under 60 lines, single-concept, no Monte Carlo or logging scaffolding.
+
 ### 7.1 Hospital Simulation
 
 The bundled example (`examples/hospital.rs`) models:

@@ -17,27 +17,8 @@
 //! interrupt and the way all Rust async cancellation works: **at the victim's
 //! next yield point.** When a higher-priority request preempts a holder, the
 //! holder's unit is transferred away immediately *and* its preemption signal is
-//! fired. A well-behaved victim races its work against that signal:
-//!
-//! ```
-//! use simu::{SimEnv, PreemptiveResource, any_of};
-//! let mut env = SimEnv::with_seed(0);
-//! let res = PreemptiveResource::new(1);
-//! let h = env.handle();
-//! let r = res.clone();
-//! env.spawn(async move {
-//!     let guard = r.request(2).await;
-//!     let service = 10.0;
-//!     // Race the service time against a possible preemption.
-//!     any_of![h.timeout(service), guard.preempted()].await;
-//!     if guard.is_preempted() {
-//!         // Higher-priority work took the unit — abandon and clean up.
-//!         return;
-//!     }
-//!     // Completed normally; dropping the guard releases the unit.
-//! });
-//! env.run();
-//! ```
+//! fired. A well-behaved victim races its work against that signal — see the
+//! [`PreemptiveResource`] type docs for the full pattern.
 //!
 //! A victim that ignores its signal keeps running (it has already lost the unit
 //! on the books, so it can no longer block anyone). This mirrors the fact that
@@ -113,9 +94,31 @@ impl PreemptiveState {
 ///
 /// Preemption is cooperative-at-yield: a higher-priority request fires the
 /// victim's [`preempted`](PreemptiveGuard::preempted) signal, and the victim is
-/// expected to bail via `any_of![work, guard.preempted()]`. `PreemptiveResource`
-/// wraps an `Rc<RefCell<>>` internally, so cloning is cheap and all clones
-/// share the same pool. It is `!Send + !Sync`.
+/// expected to bail via `any_of![work, guard.preempted()]`. A well-behaved
+/// holder races its work against that signal:
+///
+/// ```
+/// use simu::{SimEnv, PreemptiveResource, any_of};
+/// let mut env = SimEnv::with_seed(0);
+/// let res = PreemptiveResource::new(1);
+/// let h = env.handle();
+/// let r = res.clone();
+/// env.spawn(async move {
+///     let guard = r.request(2).await;
+///     let service = 10.0;
+///     // Race the service time against a possible preemption.
+///     any_of![h.timeout(service), guard.preempted()].await;
+///     if guard.is_preempted() {
+///         // Higher-priority work took the unit — abandon and clean up.
+///         return;
+///     }
+///     // Completed normally; dropping the guard releases the unit.
+/// });
+/// env.run();
+/// ```
+///
+/// `PreemptiveResource` wraps an `Rc<RefCell<>>` internally, so cloning is
+/// cheap and all clones share the same pool. It is `!Send + !Sync`.
 #[derive(Clone)]
 pub struct PreemptiveResource {
     state: Rc<RefCell<PreemptiveState>>,

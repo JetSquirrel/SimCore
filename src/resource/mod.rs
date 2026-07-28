@@ -29,6 +29,28 @@ use wait_queue::WaitQueue;
 /// all clones share the same pool. It is `!Send + !Sync` — consistent with
 /// `SimEnv`.
 ///
+/// Two processes sharing a single-unit pump — the second queues until the
+/// first one's guard drops:
+///
+/// ```
+/// use simu::{SimEnv, Resource};
+///
+/// let mut env = SimEnv::with_seed(0);
+/// let pump = Resource::new(1);
+///
+/// for _ in 0..2 {
+///     let h = env.handle();
+///     let p = pump.clone(); // same pool — share by cloning, never Arc
+///     env.spawn(async move {
+///         let _guard = p.request().await; // second process suspends here
+///         h.timeout(3.0).await;           // use the pump for 3 time units
+///     }); // guard drops → pump handed to the next waiter
+/// }
+///
+/// env.run();
+/// assert_eq!(env.now(), 6.0); // servings ran back-to-back, not in parallel
+/// ```
+///
 /// FIFO ordering is the degenerate `WaitQueue<()>` case: every waiter shares
 /// the same (unit) key, so they are served purely in insertion order.
 #[derive(Clone)]

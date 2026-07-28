@@ -30,6 +30,10 @@ exclude = [
     "PUBLISHING.md",
 ]
 
+[package.metadata.docs.rs]
+# Document the monte-carlo feature path too.
+all-features = true
+
 [lib]
 name = "simu"
 path = "src/lib.rs"

@@ -26,6 +26,41 @@ struct EventState {
 /// a normal discrete-event outcome (a signal that simply never arrives), not a
 /// panic; if a process must not block indefinitely, race the awaitable against a
 /// [`timeout`](crate::EnvHandle::timeout) via [`any_of!`](crate::any_of).
+///
+/// One trigger, many waiters — including one that only starts waiting *after*
+/// the fire (the latch makes it resolve immediately):
+///
+/// ```
+/// use simu::SimEnv;
+///
+/// let mut env = SimEnv::with_seed(0);
+/// let (trigger, ready) = env.event();
+///
+/// // Fires at t = 2.
+/// let h = env.handle();
+/// env.spawn(async move {
+///     h.timeout(2.0).await;
+///     trigger.fire(); // consumes the trigger — an event fires at most once
+/// });
+///
+/// // Suspends now, woken at t = 2.
+/// let r = ready.clone(); // Clone = same underlying event
+/// let h1 = env.handle();
+/// env.spawn(async move {
+///     r.await;
+///     assert_eq!(h1.now(), 2.0);
+/// });
+///
+/// // Starts waiting at t = 3 — after the fire — and resolves immediately.
+/// let h2 = env.handle();
+/// env.spawn(async move {
+///     h2.timeout(3.0).await;
+///     ready.await; // already fired: no suspension
+///     assert_eq!(h2.now(), 3.0);
+/// });
+///
+/// env.run();
+/// ```
 #[derive(Debug)]
 pub struct EventTrigger {
     state: Rc<RefCell<EventState>>,
