@@ -60,6 +60,26 @@ jobs:
       - name: Test (rayon monte-carlo backend)
         run: cargo test --verbose --features monte-carlo
 
+  # The library must build on the declared rust-version (Cargo.toml). Only the
+  # library target is checked: dev-dependencies (criterion) need a newer Cargo.
+  msrv:
+    name: MSRV (1.82, lib only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.82
+        uses: dtolnay/rust-toolchain@1.82
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check (default)
+        run: cargo check --lib
+
+      - name: Check (monte-carlo feature)
+        run: cargo check --lib --features monte-carlo
+
   simpy-parity:
     name: SimPy parity (correctness harness)
     runs-on: ubuntu-latest

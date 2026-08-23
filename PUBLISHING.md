@@ -1,7 +1,9 @@
 # Publishing `simu` to crates.io — Release Plan
 
-> **Status: NOT YET EXECUTED.** Pending employer publication permission (private
-> spare-time activity). Execute the steps below once cleared.
+> **Status: CLEARED.** Siemens OSS review approved publication on 2026-08-23 (no
+> additional files required; `CONTRIBUTING.md` added following the
+> [kas](https://github.com/siemens/kas/blob/master/CONTRIBUTING.md) template).
+> Preparation steps below are done; the manual publish steps remain.
 
 ## Context
 
@@ -91,7 +93,7 @@ license files, so compliance is unaffected (`reuse lint` re-verified).
 5. `cargo doc --no-deps --all-features` — confirm docs build (docs.rs will rebuild this).
 6. MSRV sanity: build once with the declared `rust-version` toolchain if `rustup` has it.
 
-## Publish steps (manual, after employer permission)
+## Publish steps (manual)
 
 1. On crates.io: log in with GitHub, **verify account email** (required to publish).
 2. Create an API token; run `cargo login <token>`.
