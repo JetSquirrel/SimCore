@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-07-27
+## [Unreleased]
+
+## [0.1.0] - 2026-08-23
 
 Initial release, published as [`simu-des`](https://crates.io/crates/simu-des)
 (imported as `use simu::…`).
@@ -50,3 +52,6 @@ Initial release, published as [`simu-des`](https://crates.io/crates/simu-des)
   `intro_*` examples; doc-examples on all core types (19 doc-tests total);
   `llms.txt` + `docs/simu-for-agents.md` for AI coding assistants, including a
   SimPy → simu translation table.
+
+[Unreleased]: https://github.com/chkhm/simu/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/chkhm/simu/releases/tag/v0.1.0

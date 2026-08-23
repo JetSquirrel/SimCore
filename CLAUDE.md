@@ -21,6 +21,7 @@ Companion docs:
 - `PLAN.md` — implementation plan / history.
 - `TESTING.md` — test strategy and coverage notes.
 - `README.md` — user-facing overview.
+- `CONTRIBUTING.md` — contribution checklist (rustfmt/clippy, SPDX headers, DCO sign-off, PR process).
 - `llms.txt` + `docs/simu-for-agents.md` — LLM-facing reference and drop-in agent
   context. **Rule: every code pattern in these files must be a verbatim copy of a
   doc-test** (tutorial chapter or type doc) — never hand-write parallel snippets.

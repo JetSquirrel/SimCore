@@ -1,6 +1,10 @@
 # simu
 
 [![CI](https://github.com/chkhm/simu/actions/workflows/ci.yml/badge.svg)](https://github.com/chkhm/simu/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/simu-des.svg)](https://crates.io/crates/simu-des)
+[![docs.rs](https://docs.rs/simu-des/badge.svg)](https://docs.rs/simu-des)
+[![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/simu-des.svg)](#license)
+[![REUSE status](https://api.reuse.software/badge/github.com/chkhm/simu)](https://api.reuse.software/info/github.com/chkhm/simu)
 
 A Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy but designed to be idiomatic Rust, high-performance, and scalable.
 
@@ -184,6 +188,9 @@ models simu runs ~10× faster at ~13× lower memory; the `Container` strict-FIFO
 divergence the harness originally surfaced is now fixed.
 
 ## For contributors
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution checklist (style,
+SPDX headers, DCO sign-off, review process).
 
 Internal design docs, aimed at people changing the library itself:
 
