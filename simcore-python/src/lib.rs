@@ -32,8 +32,9 @@ use pyo3::prelude::*;
 
 use ::simcore::rng::sample;
 use ::simcore::{
-    Container as KernelContainer, EnvHandle, PriorityResource as KernelPriorityResource,
-    PriorityResourceGuard, Resource as KernelResource, ResourceGuard, SimEnv, SplitMix64,
+    Container as KernelContainer, EnvHandle, EventAwaitable, EventTrigger,
+    PriorityResource as KernelPriorityResource, PriorityResourceGuard,
+    Resource as KernelResource, ResourceGuard, SimEnv, SplitMix64,
 };
 
 /// The simulation environment: owns the kernel `SimEnv` and collects the first
@@ -54,6 +55,10 @@ enum Request {
     PriorityAcquire(Py<PriorityAcquireRequest>),
     ContainerGet(Py<ContainerGetRequest>),
     ContainerPut(Py<ContainerPutRequest>),
+    Event(EventAwaitable),
+    /// A plain Python generator driven as a sub-routine (SimPy-style
+    /// `yield sub_process()` composition).
+    Subroutine(Py<PyAny>),
 }
 
 #[pymethods]
@@ -134,30 +139,52 @@ impl Simulation {
         Ok(sample::exponential(&mut self.handle.rng(), mean))
     }
 
-    /// Wrap a Python coroutine in one Rust process driven by the kernel.
-    fn spawn(&self, coro: Py<PyAny>) {
+    /// Wrap a Python coroutine *or generator* in one Rust process driven by
+    /// the kernel. Yielded generators are driven as sub-routines on an
+    /// explicit stack (SimPy-style composition); yielded simcore request
+    /// objects are classified and awaited as kernel futures.
+    fn spawn(&self, process: Py<PyAny>) {
         let handle = self.handle.clone();
         let error = Rc::clone(&self.error);
         self.handle.spawn(async move {
-            // Value sent into the coroutine on the next step; the first send
-            // into a fresh coroutine must be None.
+            let mut stack: Vec<Py<PyAny>> = vec![process];
+            // Value sent into the top-of-stack generator on the next step;
+            // the first send into a fresh generator must be None.
             let mut resume: Option<Py<PyAny>> = None;
-            loop {
+            while !stack.is_empty() {
+                let top = Python::attach(|py| stack.last().unwrap().clone_ref(py));
                 let step = Python::attach(|py| {
                     let value = match &resume {
                         Some(v) => v.clone_ref(py),
                         None => py.None(),
                     };
-                    coro.call_method1(py, "send", (value,))
+                    top.call_method1(py, "send", (value,))
                 });
                 let yielded = match step {
                     Ok(y) => y,
                     Err(e) => {
-                        if Python::attach(|py| e.is_instance_of::<PyStopIteration>(py)) {
-                            break; // process finished
+                        let stop_value = Python::attach(|py| {
+                            if e.is_instance_of::<PyStopIteration>(py) {
+                                // The generator's return value, delivered to
+                                // the parent frame as the `yield` result.
+                                Some(e.value(py).getattr("value").unwrap().unbind())
+                            } else {
+                                None
+                            }
+                        });
+                        match stop_value {
+                            Some(v) => {
+                                stack.pop();
+                                resume = Some(v);
+                                continue;
+                            }
+                            // A real exception anywhere in the stack
+                            // terminates the whole process.
+                            None => {
+                                *error.borrow_mut() = Some(e);
+                                break;
+                            }
                         }
-                        *error.borrow_mut() = Some(e);
-                        break;
                     }
                 };
                 let request = Python::attach(|py| -> PyResult<Request> {
@@ -172,11 +199,19 @@ impl Simulation {
                         Ok(Request::ContainerGet(g.clone().unbind()))
                     } else if let Ok(p) = obj.cast::<ContainerPutRequest>() {
                         Ok(Request::ContainerPut(p.clone().unbind()))
+                    } else if let Ok(ev) = obj.cast::<Event>() {
+                        Ok(Request::Event(ev.borrow().awaitable.clone()))
+                    } else if obj.hasattr("gi_frame")? {
+                        // A Python generator (gi_frame is generator-specific;
+                        // pyo3's PyGenerator type is unavailable under abi3):
+                        // drive it as a sub-routine.
+                        Ok(Request::Subroutine(yielded.clone_ref(py)))
                     } else {
                         let ty = obj.get_type().name()?;
                         Err(PyTypeError::new_err(format!(
-                            "simcore processes may only await simcore request objects \
-                             (timeout, acquire, container get/put), got object of type '{ty}'"
+                            "simcore processes may only yield generators or simcore \
+                             request objects (timeout, acquire, container get/put, event), \
+                             got object of type '{ty}'"
                         )))
                     }
                 });
@@ -221,6 +256,14 @@ impl Simulation {
                         container.put(amount).await;
                         resume = None;
                     }
+                    Ok(Request::Event(awaitable)) => {
+                        awaitable.await;
+                        resume = None;
+                    }
+                    Ok(Request::Subroutine(gen)) => {
+                        stack.push(gen);
+                        resume = None; // prime the sub-generator
+                    }
                     Err(e) => {
                         *error.borrow_mut() = Some(e);
                         break;
@@ -230,19 +273,55 @@ impl Simulation {
         });
     }
 
+    /// Create a manual event: `.trigger()` fires it once; yielding the event
+    /// (or awaiting it) suspends until fired. Fire-before-await is
+    /// remembered (latch semantics), matching the kernel.
+    fn event(&self) -> Event {
+        let (trigger, awaitable) = self.handle.event();
+        Event {
+            trigger: Some(trigger),
+            awaitable,
+        }
+    }
+
     /// Run the simulation until the event queue drains; re-raise the first
     /// process error (if any) so Python callers see real tracebacks.
     ///
     /// The `SimEnv` is taken out of the cell for the duration so no pyclass
     /// or field borrow is held while processes call back into this object.
     fn run(&self) -> PyResult<()> {
-        let mut env = self
-            .env
-            .borrow_mut()
-            .take()
-            .ok_or_else(|| PyRuntimeError::new_err("Simulation is already running"))?;
+        let mut env = self.take_env()?;
         env.run();
         *self.env.borrow_mut() = Some(env);
+        self.check_error()
+    }
+
+    /// Run until simulated time reaches `until` (inclusive: events scheduled
+    /// at exactly `until` are processed), then stop with the clock at
+    /// `until`. The simulation stays resumable — a later `run()` /
+    /// `run_until()` picks up where this one stopped.
+    fn run_until(&self, until: f64) -> PyResult<()> {
+        if !(until.is_finite() && until >= 0.0) {
+            return Err(PyValueError::new_err(format!(
+                "run_until boundary must be finite and non-negative (got {until})"
+            )));
+        }
+        let mut env = self.take_env()?;
+        env.run_until(until);
+        *self.env.borrow_mut() = Some(env);
+        self.check_error()
+    }
+}
+
+impl Simulation {
+    fn take_env(&self) -> PyResult<SimEnv> {
+        self.env
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| PyRuntimeError::new_err("Simulation is already running"))
+    }
+
+    fn check_error(&self) -> PyResult<()> {
         if let Some(e) = self.error.borrow_mut().take() {
             return Err(e);
         }
@@ -503,6 +582,40 @@ impl ContainerPutRequest {
     }
 }
 
+/// A one-shot manual event (SimPy-style signalling). `.trigger()` fires it,
+/// waking all current waiters; any later await resolves immediately (latch).
+/// Yielding the event itself from a process suspends until fired.
+#[pyclass(unsendable)]
+struct Event {
+    trigger: Option<EventTrigger>,
+    awaitable: EventAwaitable,
+}
+
+#[pymethods]
+impl Event {
+    /// Fire the event. One-shot: a second call raises RuntimeError (the
+    /// kernel trigger is consumed by firing).
+    fn trigger(&mut self) -> PyResult<()> {
+        match self.trigger.take() {
+            Some(t) => {
+                t.fire();
+                Ok(())
+            }
+            None => Err(PyRuntimeError::new_err("Event was already triggered")),
+        }
+    }
+
+    /// Whether the event has fired yet.
+    #[getter]
+    fn triggered(&self) -> bool {
+        self.trigger.is_none()
+    }
+
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> Driver {
+        Driver::new(slf.into_any(), py.None())
+    }
+}
+
 /// Awaitable timeout request; the trampoline reads `t` and awaits the kernel.
 #[pyclass]
 struct TimeoutRequest {
@@ -653,6 +766,7 @@ fn simcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PriorityAcquireRequest>()?;
     m.add_class::<ContainerGetRequest>()?;
     m.add_class::<ContainerPutRequest>()?;
+    m.add_class::<Event>()?;
     m.add_class::<Driver>()?;
     m.add_class::<Completed>()?;
     Ok(())
