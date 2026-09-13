@@ -24,15 +24,19 @@
 //!   sends the AcquireRequest back, so `x` binds the request (which holds
 //!   the kernel guard until `__aexit__` drops it).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 
 use pyo3::exceptions::{PyRuntimeError, PyStopIteration, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 
 use ::simcore::rng::sample;
 use ::simcore::{
     Container as KernelContainer, EnvHandle, EventAwaitable, EventTrigger,
+    PreemptiveGuard as KernelPreemptiveGuard, PreemptiveResource as KernelPreemptiveResource,
     PriorityResource as KernelPriorityResource, PriorityResourceGuard,
     Resource as KernelResource, ResourceGuard, SimEnv, SplitMix64,
 };
@@ -56,6 +60,9 @@ enum Request {
     ContainerGet(Py<ContainerGetRequest>),
     ContainerPut(Py<ContainerPutRequest>),
     Event(EventAwaitable),
+    PreemptAcquire(Py<PreemptAcquireRequest>),
+    AnyOf(Py<AnyOfRequest>),
+    AllOf(Py<AllOfRequest>),
     /// A plain Python generator driven as a sub-routine (SimPy-style
     /// `yield sub_process()` composition).
     Subroutine(Py<PyAny>),
@@ -201,6 +208,14 @@ impl Simulation {
                         Ok(Request::ContainerPut(p.clone().unbind()))
                     } else if let Ok(ev) = obj.cast::<Event>() {
                         Ok(Request::Event(ev.borrow().awaitable.clone()))
+                    } else if let Ok(s) = obj.cast::<PreemptionSignal>() {
+                        Ok(Request::Event(s.borrow().signal.clone()))
+                    } else if let Ok(a) = obj.cast::<PreemptAcquireRequest>() {
+                        Ok(Request::PreemptAcquire(a.clone().unbind()))
+                    } else if let Ok(a) = obj.cast::<AnyOfRequest>() {
+                        Ok(Request::AnyOf(a.clone().unbind()))
+                    } else if let Ok(a) = obj.cast::<AllOfRequest>() {
+                        Ok(Request::AllOf(a.clone().unbind()))
                     } else if obj.hasattr("gi_frame")? {
                         // A Python generator (gi_frame is generator-specific;
                         // pyo3's PyGenerator type is unavailable under abi3):
@@ -260,6 +275,64 @@ impl Simulation {
                         awaitable.await;
                         resume = None;
                     }
+                    Ok(Request::PreemptAcquire(acquire)) => {
+                        let (resource, priority) = Python::attach(|py| {
+                            let req = acquire.borrow(py);
+                            let resource = req.resource.borrow(py).inner.clone();
+                            (resource, req.priority)
+                        });
+                        let guard = resource.request(priority).await;
+                        Python::attach(|py| acquire.borrow_mut(py).guard = Some(guard));
+                        resume = Some(acquire.into_any());
+                    }
+                    Ok(Request::AnyOf(any)) => {
+                        let built = Python::attach(|py| {
+                            let arms: Vec<Py<PyAny>> = any
+                                .borrow(py)
+                                .arms
+                                .iter()
+                                .map(|a| a.clone_ref(py))
+                                .collect();
+                            build_arms(&arms, py, &handle)
+                        });
+                        match built {
+                            Ok((winner, futures)) => {
+                                ::simcore::AnyOf::new(futures).await;
+                                let idx = winner.get();
+                                Python::attach(|py| any.borrow_mut(py).winner = idx);
+                                resume = idx.map(|i| {
+                                    Python::attach(|py| {
+                                        i.into_pyobject(py).unwrap().unbind().into_any()
+                                    })
+                                });
+                            }
+                            Err(e) => {
+                                *error.borrow_mut() = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                    Ok(Request::AllOf(all)) => {
+                        let built = Python::attach(|py| {
+                            let arms: Vec<Py<PyAny>> = all
+                                .borrow(py)
+                                .arms
+                                .iter()
+                                .map(|a| a.clone_ref(py))
+                                .collect();
+                            build_arms(&arms, py, &handle)
+                        });
+                        match built {
+                            Ok((_winner, futures)) => {
+                                ::simcore::AllOf::new(futures).await;
+                                resume = None;
+                            }
+                            Err(e) => {
+                                *error.borrow_mut() = Some(e);
+                                break;
+                            }
+                        }
+                    }
                     Ok(Request::Subroutine(gen)) => {
                         stack.push(gen);
                         resume = None; // prime the sub-generator
@@ -282,6 +355,32 @@ impl Simulation {
             trigger: Some(trigger),
             awaitable,
         }
+    }
+
+    /// Race several request objects: resolves with the index of the first
+    /// arm to complete. Loser arms are cancelled (kernel Drop semantics);
+    /// their Python request objects stay un-acquired and can be re-awaited.
+    /// Typical use: `winner = await sim.any_of(call, sim.timeout(deadline))`.
+    #[pyo3(signature = (*arms))]
+    fn any_of(&self, arms: &Bound<'_, PyTuple>) -> PyResult<AnyOfRequest> {
+        let v = collect_arms(arms)?;
+        if v.is_empty() {
+            return Err(PyValueError::new_err("any_of requires at least one request"));
+        }
+        Ok(AnyOfRequest {
+            arms: v,
+            winner: None,
+        })
+    }
+
+    /// Wait for all of several request objects; resolves to None once every
+    /// arm completed. Each arm's outcome is stored in its request object
+    /// (e.g. an acquire arm's guard). Empty input resolves immediately.
+    #[pyo3(signature = (*arms))]
+    fn all_of(&self, arms: &Bound<'_, PyTuple>) -> PyResult<AllOfRequest> {
+        Ok(AllOfRequest {
+            arms: collect_arms(arms)?,
+        })
     }
 
     /// Run the simulation until the event queue drains; re-raise the first
@@ -327,6 +426,141 @@ impl Simulation {
         }
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Combinator arms: translate Python request objects into kernel futures
+// ---------------------------------------------------------------------------
+
+/// One combinator arm: a kernel future that resolves to () and stores its
+/// outcome (e.g. a guard) into its Python request object on completion.
+type ArmFuture = Pin<Box<dyn Future<Output = ()>>>;
+
+/// Every request type that can appear as an any_of/all_of arm.
+fn is_supported_arm(obj: &Bound<'_, PyAny>) -> bool {
+    obj.is_instance_of::<TimeoutRequest>()
+        || obj.is_instance_of::<AcquireRequest>()
+        || obj.is_instance_of::<PriorityAcquireRequest>()
+        || obj.is_instance_of::<PreemptAcquireRequest>()
+        || obj.is_instance_of::<ContainerGetRequest>()
+        || obj.is_instance_of::<ContainerPutRequest>()
+        || obj.is_instance_of::<Event>()
+        || obj.is_instance_of::<PreemptionSignal>()
+}
+
+fn collect_arms(arms: &Bound<'_, PyTuple>) -> PyResult<Vec<Py<PyAny>>> {
+    let mut v = Vec::with_capacity(arms.len());
+    for arm in arms.iter() {
+        if !is_supported_arm(&arm) {
+            let ty = arm.get_type().name()?;
+            return Err(PyTypeError::new_err(format!(
+                "combinator arms must be simcore request objects (timeout, acquire, \
+                 container get/put, event), got object of type '{ty}'"
+            )));
+        }
+        v.push(arm.unbind());
+    }
+    Ok(v)
+}
+
+/// Translate one arm's Python request object into its kernel future.
+/// On completion the outcome is stored back into the request object, so a
+/// winning acquire arm holds its guard exactly as if awaited directly; a
+/// losing arm's future is dropped mid-flight and the kernel's Drop-cancel
+/// semantics clean up (waiter deregistration / unit handoff), leaving the
+/// Python request object un-acquired and re-awaitable.
+fn translate_arm(obj: &Py<PyAny>, py: Python<'_>, handle: &EnvHandle) -> PyResult<ArmFuture> {
+    let b = obj.bind(py);
+    if let Ok(t) = b.cast::<TimeoutRequest>() {
+        let delay = t.borrow().t;
+        let h = handle.clone();
+        Ok(Box::pin(async move {
+            h.timeout(delay).await;
+        }))
+    } else if let Ok(a) = b.cast::<AcquireRequest>() {
+        let resource = a.borrow().resource.borrow(py).inner.clone();
+        let req = a.clone().unbind();
+        Ok(Box::pin(async move {
+            let guard = resource.request().await;
+            Python::attach(|py| req.borrow_mut(py).guard = Some(guard));
+        }))
+    } else if let Ok(a) = b.cast::<PriorityAcquireRequest>() {
+        let (resource, priority) = {
+            let req = a.borrow();
+            let resource = req.resource.borrow(py).inner.clone();
+            (resource, req.priority)
+        };
+        let req = a.clone().unbind();
+        Ok(Box::pin(async move {
+            let guard = resource.request(priority).await;
+            Python::attach(|py| req.borrow_mut(py).guard = Some(guard));
+        }))
+    } else if let Ok(a) = b.cast::<PreemptAcquireRequest>() {
+        let (resource, priority) = {
+            let req = a.borrow();
+            let resource = req.resource.borrow(py).inner.clone();
+            (resource, req.priority)
+        };
+        let req = a.clone().unbind();
+        Ok(Box::pin(async move {
+            let guard = resource.request(priority).await;
+            Python::attach(|py| req.borrow_mut(py).guard = Some(guard));
+        }))
+    } else if let Ok(g) = b.cast::<ContainerGetRequest>() {
+        let (container, amount) = {
+            let req = g.borrow();
+            let container = req.container.borrow(py).inner.clone();
+            (container, req.amount)
+        };
+        Ok(Box::pin(async move {
+            container.get(amount).await;
+        }))
+    } else if let Ok(p) = b.cast::<ContainerPutRequest>() {
+        let (container, amount) = {
+            let req = p.borrow();
+            let container = req.container.borrow(py).inner.clone();
+            (container, req.amount)
+        };
+        Ok(Box::pin(async move {
+            container.put(amount).await;
+        }))
+    } else if let Ok(ev) = b.cast::<Event>() {
+        let awaitable = ev.borrow().awaitable.clone();
+        Ok(Box::pin(async move {
+            awaitable.await;
+        }))
+    } else if let Ok(s) = b.cast::<PreemptionSignal>() {
+        let signal = s.borrow().signal.clone();
+        Ok(Box::pin(async move {
+            signal.await;
+        }))
+    } else {
+        let ty = b.get_type().name()?;
+        Err(PyTypeError::new_err(format!(
+            "unsupported combinator arm of type '{ty}'"
+        )))
+    }
+}
+
+/// Build all arm futures plus a shared cell recording the first finisher.
+fn build_arms(
+    arms: &[Py<PyAny>],
+    py: Python<'_>,
+    handle: &EnvHandle,
+) -> PyResult<(Rc<Cell<Option<usize>>>, Vec<ArmFuture>)> {
+    let winner = Rc::new(Cell::new(None));
+    let mut futures = Vec::with_capacity(arms.len());
+    for (i, arm) in arms.iter().enumerate() {
+        let fut = translate_arm(arm, py, handle)?;
+        let w = Rc::clone(&winner);
+        futures.push(Box::pin(async move {
+            fut.await;
+            if w.get().is_none() {
+                w.set(Some(i));
+            }
+        }) as ArmFuture);
+    }
+    Ok((winner, futures))
 }
 
 /// A capacity-limited FIFO resource pool (single-unit acquire).
@@ -539,6 +773,194 @@ impl PriorityAcquireRequest {
     #[getter]
     fn acquired(&self) -> bool {
         self.guard.is_some()
+    }
+}
+
+/// A capacity-limited pool whose held units can be **preempted** by
+/// higher-priority requests (cooperative-at-yield, like the kernel).
+///
+/// Preemption discovery flow for a holder:
+/// ```python
+/// async with pre.acquire(priority=100) as slot:
+///     winner = await sim.any_of(sim.timeout(latency), slot.preempt_event())
+///     if slot.preempted:
+///         ...  # evicted: abandon the work; __aexit__ drop is a no-op
+/// ```
+/// A victim that never checks keeps running but no longer holds the unit on
+/// the books — exactly the kernel's cooperative semantics.
+#[pyclass(unsendable)]
+struct PreemptiveResource {
+    inner: KernelPreemptiveResource,
+}
+
+#[pymethods]
+impl PreemptiveResource {
+    #[new]
+    fn new(capacity: usize) -> PyResult<Self> {
+        if capacity == 0 {
+            return Err(PyValueError::new_err(
+                "PreemptiveResource capacity must be at least 1",
+            ));
+        }
+        Ok(PreemptiveResource {
+            inner: KernelPreemptiveResource::new(capacity),
+        })
+    }
+
+    /// Request one unit at `priority` (lower = higher priority). Resolves
+    /// immediately if a unit is free OR a strictly lower-priority holder can
+    /// be evicted; otherwise suspends in priority order.
+    fn acquire(slf: Py<Self>, priority: u32) -> PreemptAcquireRequest {
+        PreemptAcquireRequest {
+            resource: slf,
+            priority,
+            guard: None,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.inner.capacity()
+    }
+
+    fn in_use(&self) -> usize {
+        self.inner.in_use()
+    }
+
+    fn queue_len(&self) -> usize {
+        self.inner.queue_len()
+    }
+}
+
+/// Awaitable preemptive acquire request; mirrors [`PriorityAcquireRequest`]
+/// plus the preemption-observation API (`preempted`, `preempt_event()`).
+#[pyclass(unsendable)]
+struct PreemptAcquireRequest {
+    resource: Py<PreemptiveResource>,
+    priority: u32,
+    guard: Option<KernelPreemptiveGuard>,
+}
+
+#[pymethods]
+impl PreemptAcquireRequest {
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> Driver {
+        let fallback = slf.clone_ref(py).into_any();
+        Driver::new(slf.into_any(), fallback)
+    }
+
+    fn __aenter__(slf: Py<Self>, py: Python<'_>) -> Driver {
+        let fallback = slf.clone_ref(py).into_any();
+        Driver::new(slf.into_any(), fallback)
+    }
+
+    /// Drop the guard. If the unit was preempted, the kernel drop is a
+    /// no-op (the unit already went to the preemptor); otherwise it is
+    /// released, waking the next priority waiter.
+    fn __aexit__(
+        &mut self,
+        _exc_type: &Bound<'_, PyAny>,
+        _exc: &Bound<'_, PyAny>,
+        _tb: &Bound<'_, PyAny>,
+    ) -> Completed {
+        self.guard = None;
+        Completed
+    }
+
+    /// Explicit release for the bare `await pre.acquire(prio)` style.
+    fn release(&mut self) {
+        self.guard = None;
+    }
+
+    #[getter]
+    fn priority(&self) -> u32 {
+        self.priority
+    }
+
+    #[getter]
+    fn acquired(&self) -> bool {
+        self.guard.is_some()
+    }
+
+    /// Synchronous preemption check (kernel `is_preempted`). False while no
+    /// unit is held.
+    #[getter]
+    fn preempted(&self) -> bool {
+        self.guard.as_ref().is_some_and(|g| g.is_preempted())
+    }
+
+    /// An awaitable that resolves when this held unit is preempted — the arm
+    /// to race against the work (`sim.any_of(work, slot.preempt_event())`).
+    /// Raises RuntimeError if no unit is currently held.
+    fn preempt_event(&self) -> PyResult<PreemptionSignal> {
+        match &self.guard {
+            Some(g) => Ok(PreemptionSignal {
+                signal: g.preempted(),
+            }),
+            None => Err(PyRuntimeError::new_err(
+                "preempt_event() requires a held unit (call it after the acquire \
+                 resolved and before release)",
+            )),
+        }
+    }
+}
+
+/// Awaitable preemption signal for one held unit (see
+/// [`PreemptAcquireRequest::preempt_event`]).
+#[pyclass(unsendable)]
+struct PreemptionSignal {
+    signal: EventAwaitable,
+}
+
+#[pymethods]
+impl PreemptionSignal {
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> Driver {
+        Driver::new(slf.into_any(), py.None())
+    }
+}
+
+/// Awaitable race over several request objects; the await result is the
+/// winning arm's index (also available as `.winner`).
+#[pyclass(unsendable)]
+struct AnyOfRequest {
+    arms: Vec<Py<PyAny>>,
+    winner: Option<usize>,
+}
+
+#[pymethods]
+impl AnyOfRequest {
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> Driver {
+        let fallback = slf.clone_ref(py).into_any();
+        Driver::new(slf.into_any(), fallback)
+    }
+
+    /// Index of the arm that completed first, or None while pending.
+    #[getter]
+    fn winner(&self) -> Option<usize> {
+        self.winner
+    }
+
+    /// The arm request objects, in order.
+    #[getter]
+    fn arms(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+        self.arms.iter().map(|a| a.clone_ref(py)).collect()
+    }
+}
+
+/// Awaitable join over several request objects; the await result is None.
+#[pyclass(unsendable)]
+struct AllOfRequest {
+    arms: Vec<Py<PyAny>>,
+}
+
+#[pymethods]
+impl AllOfRequest {
+    fn __await__(slf: Py<Self>, py: Python<'_>) -> Driver {
+        Driver::new(slf.into_any(), py.None())
+    }
+
+    /// The arm request objects, in order.
+    #[getter]
+    fn arms(&self, py: Python<'_>) -> Vec<Py<PyAny>> {
+        self.arms.iter().map(|a| a.clone_ref(py)).collect()
     }
 }
 
@@ -760,10 +1182,15 @@ fn simcore(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Simulation>()?;
     m.add_class::<Resource>()?;
     m.add_class::<PriorityResource>()?;
+    m.add_class::<PreemptiveResource>()?;
     m.add_class::<Container>()?;
     m.add_class::<TimeoutRequest>()?;
     m.add_class::<AcquireRequest>()?;
     m.add_class::<PriorityAcquireRequest>()?;
+    m.add_class::<PreemptAcquireRequest>()?;
+    m.add_class::<PreemptionSignal>()?;
+    m.add_class::<AnyOfRequest>()?;
+    m.add_class::<AllOfRequest>()?;
     m.add_class::<ContainerGetRequest>()?;
     m.add_class::<ContainerPutRequest>()?;
     m.add_class::<Event>()?;

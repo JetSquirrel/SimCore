@@ -52,3 +52,50 @@ criterion = { version = "0.5", features = ["html_reports"] }
 [[bench]]
 name = "simulation"
 harness = false
+
+# Queueing-theory validation suite (examples/queueing/): each model is
+# checked against its closed-form analytical result. Two-level paths need
+# explicit targets; examples/queueing/common/ is a shared module, not a target.
+[[example]]
+name = "queueing-mm1"
+path = "examples/queueing/mm1.rs"
+
+[[example]]
+name = "queueing-mmk"
+path = "examples/queueing/mmk.rs"
+
+[[example]]
+name = "queueing-mmkk"
+path = "examples/queueing/mmkk.rs"
+
+[[example]]
+name = "queueing-jackson"
+path = "examples/queueing/jackson.rs"
+
+[[example]]
+name = "queueing-classed-network"
+path = "examples/queueing/classed_network.rs"
+
+[[example]]
+name = "queueing-closed-network"
+path = "examples/queueing/closed_network.rs"
+
+[[example]]
+name = "queueing-mg1"
+path = "examples/queueing/mg1.rs"
+
+[[example]]
+name = "queueing-pareto"
+path = "examples/queueing/pareto.rs"
+
+[[example]]
+name = "queueing-lcfs"
+path = "examples/queueing/lcfs.rs"
+
+[[example]]
+name = "queueing-random"
+path = "examples/queueing/random.rs"
+
+[[example]]
+name = "queueing-priority"
+path = "examples/queueing/priority.rs"
