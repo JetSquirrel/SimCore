@@ -296,8 +296,8 @@ impl Simulation {
         self.check_error()
     }
 
-    /// Run until simulated time reaches `until` (inclusive: events scheduled
-    /// at exactly `until` are processed), then stop with the clock at
+    /// Run until simulated time reaches `until` (exclusive: an event
+    /// scheduled at exactly `until` is not run), then stop with the clock at
     /// `until`. The simulation stays resumable — a later `run()` /
     /// `run_until()` picks up where this one stopped.
     fn run_until(&self, until: f64) -> PyResult<()> {
