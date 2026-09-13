@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use simu::SimEnv;
-use simu::{Container, PreemptiveResource, PriorityResource, Resource};
+use simcore::SimEnv;
+use simcore::{Container, PreemptiveResource, PriorityResource, Resource};
 
 // ---------------------------------------------------------------------------
 // 1. timeout_throughput — core executor baseline
@@ -171,7 +171,7 @@ fn monte_carlo_scaling(c: &mut Criterion) {
     for k in [1_u64, 2, 4, 8] {
         group.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
             b.iter(|| {
-                simu::monte_carlo::run(0..k, |_seed| run_mixed(100));
+                simcore::monte_carlo::run(0..k, |_seed| run_mixed(100));
             });
         });
     }
@@ -238,7 +238,7 @@ fn preemptive_contention(c: &mut Criterion) {
                     env.spawn(async move {
                         let guard = r.request(prio).await;
                         // Race the hold against a possible preemption.
-                        simu::any_of![h.timeout(1.0), guard.preempted()].await;
+                        simcore::any_of![h.timeout(1.0), guard.preempted()].await;
                     });
                 }
 

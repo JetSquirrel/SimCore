@@ -1,15 +1,18 @@
-# Using `simu` (crates.io: `simu-des`) — context for AI coding assistants
+# Using SimCore (crates.io: `simcore-des`) — context for AI coding assistants
 
 Drop this file into your project's agent context (CLAUDE.md, cursor rules, etc.)
-when working with the simu discrete-event simulation library. Full reference:
-`llms.txt` in the simu repository, or https://docs.rs/simu-des (start at the
-`tutorial` module).
+when working with the SimCore discrete-event simulation kernel. Full reference:
+`llms.txt` in the SimCore repository (https://github.com/JetSquirrel/SimCore),
+or https://docs.rs/simcore-des (start at the `tutorial` module).
+
+SimCore is a tiny deterministic discrete-event simulation kernel for building
+system simulators.
 
 ## Setup
 
-- Cargo.toml: `simu-des = "0.1"` (feature `monte-carlo` for rayon-backed replications).
-- Code: `use simu::{SimEnv, Resource, ...};` — the **package** is `simu-des`, the
-  **library** is `simu`.
+- Cargo.toml: `simcore-des = "0.1"` (feature `monte-carlo` for rayon-backed replications).
+- Code: `use simcore::{SimEnv, Resource, ...};` — the **package** is `simcore-des`, the
+  **library** is `simcore`.
 
 ## Core idioms
 
@@ -29,7 +32,7 @@ when working with the simu discrete-event simulation library. Full reference:
   `any_of![h.timeout(work), stop_signal].await` — the losing future is dropped.
   For eviction from a resource, use `PreemptiveResource` and race
   `guard.preempted()`, then check `guard.is_preempted()`.
-- Stochastic times: `let d = simu::rng::sample::exponential(&mut h.rng(), mean);`
+- Stochastic times: `let d = simcore::rng::sample::exponential(&mut h.rng(), mean);`
   **before** any `.await`, then `h.timeout(d).await`.
 - N replications in parallel: `monte_carlo::run(0..n, |seed| { build env inside;
   run; return metric })` — results in seed order.
@@ -47,7 +50,7 @@ when working with the simu discrete-event simulation library. Full reference:
 
 ## Hard rules (violations = compile error or panic)
 
-1. **Never** wrap simu types in `Arc`/`Mutex` or move them across threads — they are
+1. **Never** wrap SimCore types in `Arc`/`Mutex` or move them across threads — they are
    `!Send + !Sync`. Parallelism is per-replication only (`monte_carlo::run` builds a
    fresh `SimEnv` inside each closure).
 2. **Never** hold `h.rng()` across an `.await`, and never take two rng guards at
@@ -57,14 +60,14 @@ when working with the simu discrete-event simulation library. Full reference:
 4. Timeouts panic on negative/non-finite delays — clamp samples from distributions
    that can go negative.
 5. `Container::put/get` panic on `amount <= 0` or `amount > capacity`.
-6. No tokio/async-std APIs inside processes — simu's own executor drives everything.
+6. No tokio/async-std APIs inside processes — SimCore's own executor drives everything.
 7. Share mutable state between processes with `Rc<RefCell<...>>`, borrowing only in
    short scopes that contain no `.await`.
 
 ## Minimal working example
 
 ```rust
-use simu::{SimEnv, Resource};
+use simcore::{SimEnv, Resource};
 
 let mut env = SimEnv::with_seed(42);
 let bcs = Resource::new(2); // two charging spots

@@ -4,9 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`simu` is a Rust library for Discrete Event Simulation (DES), inspired by SimPy. The MVP is fully
-implemented and tested. The crates.io package is **`simu-des`** (the name `simu` was taken) with
-`[lib] name = "simu"`, so all code imports stay `use simu::…`.
+**SimCore** is a tiny deterministic discrete-event simulation (DES) kernel for building system
+simulators, written in Rust and inspired by SimPy. It is a hard fork of the `simu` project
+(upstream: <https://github.com/chkhm/simu>). The MVP is fully implemented and tested. The crates.io
+package is **`simcore-des`** (the name `simcore` was taken) with `[lib] name = "simcore"`, so all
+code imports stay `use simcore::…`.
+
+Route (kernel-first, two binding tracks — see README "Roadmap"): a **Python frontend** carrying the
+domain simulators (`sim-llm`, `sim-cloud`, `sim-xxx`), and a **`cloudsimrs`** Rust domain layer with
+a **Java frontend** for CloudSim / CloudSim Plus compatibility. Hard rule: domain types (VM, host,
+LLM provider, budget, …) never enter the kernel crate — queueing primitives live in the kernel,
+policies and accounting live in the layers above.
 
 Licensing: dual **MIT OR Apache-2.0**, [REUSE 3.3](https://reuse.software/spec-3.3)-compliant —
 license texts live in `LICENSES/`, every code file carries an SPDX header, prose/uncommentable
@@ -18,18 +26,17 @@ Companion docs:
 
 - `SPEC.md` — the design source of truth (architecture, API contracts, invariants, roadmap).
 - `API.md` — signature cheat-sheet only; semantics live in rustdoc (docs.rs).
-- `PLAN.md` — implementation plan / history.
 - `TESTING.md` — test strategy and coverage notes.
 - `README.md` — user-facing overview.
 - `CONTRIBUTING.md` — contribution checklist (rustfmt/clippy, SPDX headers, DCO sign-off, PR process).
-- `llms.txt` + `docs/simu-for-agents.md` — LLM-facing reference and drop-in agent
+- `llms.txt` + `docs/simcore-for-agents.md` — LLM-facing reference and drop-in agent
   context. **Rule: every code pattern in these files must be a verbatim copy of a
   doc-test** (tutorial chapter or type doc) — never hand-write parallel snippets.
-- `src/tutorial.rs` — doc-only "simu in 10 minutes" module (5 chapters, all
+- `src/tutorial.rs` — doc-only "SimCore in 10 minutes" module (5 chapters, all
   doc-tests); each chapter has a runnable `examples/intro_*.rs` twin.
 
 When changing behaviour, keep `SPEC.md` and `API.md` in sync — and when changing
-tutorial/type doc-tests, re-sync the copies in `llms.txt` / `docs/simu-for-agents.md`.
+tutorial/type doc-tests, re-sync the copies in `llms.txt` / `docs/simcore-for-agents.md`.
 
 ## Commands
 
@@ -47,7 +54,7 @@ cargo clippy -- -D warnings       # must stay warning-clean
 ## Source layout
 
 ```
-simu/
+SimCore/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs            # public re-exports only
@@ -62,7 +69,7 @@ simu/
 │   ├── process.rs        # ProcessHandle<T>, spawn_with_handle
 │   ├── monte_carlo.rs    # monte_carlo::run — std::thread (default) or rayon (monte-carlo feature)
 │   ├── rng.rs            # RandomSource trait, portable SplitMix64 feed, sample:: transforms
-│   ├── tutorial.rs       # doc-only "simu in 10 minutes" (5 chapters, all doc-tests)
+│   ├── tutorial.rs       # doc-only "SimCore in 10 minutes" (5 chapters, all doc-tests)
 │   └── resource/
 │       ├── mod.rs        # Resource, ResourceRequest, ResourceGuard (FIFO)
 │       ├── wait_queue.rs # pub(crate) WaitQueue<K>: shared direct-handoff waiter bookkeeping
@@ -71,7 +78,7 @@ simu/
 │       └── preemptive.rs # PreemptiveResource — priority pool with cooperative-at-yield preemption
 ├── llms.txt              # LLM-facing single-file reference (patterns copied from doc-tests)
 ├── docs/
-│   └── simu-for-agents.md # drop-in agent-context file for downstream users
+│   └── simcore-for-agents.md # drop-in agent-context file for downstream users
 ├── examples/
 │   ├── intro_*.rs        # 4 beginner examples, one per tutorial chapter (<60 lines each)
 │   ├── hospital.rs  / hospital.md

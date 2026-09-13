@@ -16,7 +16,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::{Container, EventAwaitable, PreemptiveResource, Resource, SimEnv};
+use simcore::{Container, EventAwaitable, PreemptiveResource, Resource, SimEnv};
 
 type Log = Rc<RefCell<Vec<String>>>;
 
@@ -130,7 +130,7 @@ fn preempt_during_batch() {
         let h = env.handle();
         env.spawn(async move {
             let guard = r.request(5).await;
-            simu::any_of![h.timeout(100.0), guard.preempted()].await;
+            simcore::any_of![h.timeout(100.0), guard.preempted()].await;
             log.borrow_mut().push(format!(
                 "victim done @{} preempted={}",
                 h.now(),

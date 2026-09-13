@@ -51,7 +51,7 @@ impl RandomSource for StdRng {
 ///
 /// SplitMix64 is a well-known generator whose output is defined entirely by
 /// wrapping `u64` arithmetic with fixed constants, so it can be re-implemented
-/// identically in any language. `simu` uses it as the shared "external feed"
+/// identically in any language. SimCore uses it as the shared "external feed"
 /// that lets a Rust run and a Python run draw the same number stream from the
 /// same seed.
 ///
@@ -122,7 +122,7 @@ impl RandomSource for SplitMix64 {
 /// agree to floating-point tolerance.
 ///
 /// ```
-/// use simu::rng::{sample, SplitMix64};
+/// use simcore::rng::{sample, SplitMix64};
 /// let mut feed = SplitMix64::new(42);
 /// let u = sample::uniform01(&mut feed); // in [0, 1)
 /// assert!((0.0..1.0).contains(&u));

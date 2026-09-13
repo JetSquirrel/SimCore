@@ -5,8 +5,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::SimEnv;
-use simu::Container;
+use simcore::SimEnv;
+use simcore::Container;
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }
@@ -197,7 +197,7 @@ fn fifo_ordering_for_put_waiters() {
 // Regression: head-of-line FIFO. A freshly-arriving small `get` must NOT take
 // level ahead of an already-blocked larger `get`, even when the current level
 // would cover the small one. This matches SimPy's Container and the documented
-// "served FIFO" contract. (Found by the compare/ SimPy harness: simu used to
+// "served FIFO" contract. (Found by the compare/ SimPy harness: SimCore used to
 // let the small draw bypass the queue.)
 //
 // Setup: empty cap-10 container.

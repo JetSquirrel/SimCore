@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Tutorial chapter 4 (`simu::tutorial::ch04_shared_resources`): four cars,
+//! Tutorial chapter 4 (`simcore::tutorial::ch04_shared_resources`): four cars,
 //! staggered arrivals, two charging spots — FIFO queuing on a `Resource` with
 //! RAII release.
 
-use simu::{Resource, SimEnv};
+use simcore::{Resource, SimEnv};
 
 fn main() {
     let mut env = SimEnv::with_seed(42);

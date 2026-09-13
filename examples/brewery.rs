@@ -13,12 +13,12 @@ use std::rc::Rc;
 
 use rand::Rng;
 use rand_distr::{Exp, Normal};
-use simu::{any_of, AllOf, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
+use simcore::{any_of, AllOf, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
 // Brewery simulation — a craft brewery producing beer in batches.
 //
-// Demonstrates every public primitive of `simu`:
+// Demonstrates every public primitive of `simcore`:
 //
 //  • Resource          : mash tuns, kettles, fermenters (the bio-reactors),
 //                        conditioning tanks
@@ -430,7 +430,7 @@ fn run_simulation(seed: u64) -> SimResult {
 // ---------------------------------------------------------------------------
 
 fn main() {
-    let results = simu::monte_carlo::run(0..10, run_simulation);
+    let results = simcore::monte_carlo::run(0..10, run_simulation);
 
     println!(
         "{:>4}  {:>8}  {:>7}  {:>8}  {:>5}  {:>8}  {:>6}  {:>11}  {:>12}  {:>11}  {:>9}",

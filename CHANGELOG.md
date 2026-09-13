@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Hard fork to SimCore**: this project is a verbatim hard fork of
+  [`simu`](https://github.com/chkhm/simu) 0.1.0 (crates.io `simu-des`,
+  © Siemens / Christoph Kuhmuench, MIT OR Apache-2.0). The crates.io package
+  is now **`simcore-des`**, the lib target is `simcore` (imported as
+  `use simcore::…`), and the project's display name is **SimCore**. Names and
+  branding only — no functional changes. The fork lives at
+  <https://github.com/JetSquirrel/SimCore>.
+
 ## [0.1.0] - 2026-08-23
 
 Initial release, published as [`simu-des`](https://crates.io/crates/simu-des)
@@ -53,5 +63,5 @@ Initial release, published as [`simu-des`](https://crates.io/crates/simu-des)
   `llms.txt` + `docs/simu-for-agents.md` for AI coding assistants, including a
   SimPy → simu translation table.
 
-[Unreleased]: https://github.com/chkhm/simu/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/JetSquirrel/SimCore/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/chkhm/simu/releases/tag/v0.1.0

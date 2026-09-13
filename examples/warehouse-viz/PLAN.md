@@ -31,7 +31,7 @@
 
 ### Non-goals
 
-- Not a general-purpose DES visualizer or a `simu` library feature — it is an
+- Not a general-purpose DES visualizer or a `simcore` library feature — it is an
   example-specific companion tool, scoped to the warehouse domain.
 - No editing/authoring of simulations in the browser; it is **playback only**.
 - No live streaming from a running `SimEnv`; it consumes a finished log file.
@@ -336,7 +336,7 @@ we add a parallel structured stream.
 - Increment a `dock_pending` (etc.) counter immediately before each
   `…request().await`, decrement immediately after it resolves; the snapshot reads
   these for `queue`. Same pattern gives `putaway_active` for forklift coloring.
-- Pure example-level bookkeeping — **no `simu` library change in v1**.
+- Pure example-level bookkeeping — **no `simcore` library change in v1**.
 
 ### 6.3 Tiny JSON serializer (no `serde`)
 

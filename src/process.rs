@@ -32,7 +32,7 @@ struct ProcessSlot<T> {
 /// run; its return value, if any, is dropped when the process completes.
 ///
 /// ```
-/// use simu::SimEnv;
+/// use simcore::SimEnv;
 ///
 /// let mut env = SimEnv::with_seed(0);
 /// let h = env.handle();

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use simu::{AllOf, AnyOf};
-use simu::SimEnv;
-use simu::{all_of, any_of};
+use simcore::{AllOf, AnyOf};
+use simcore::SimEnv;
+use simcore::{all_of, any_of};
 
 // ---------------------------------------------------------------------------
 // AnyOf tests

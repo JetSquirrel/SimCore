@@ -41,7 +41,7 @@ use super::wait_queue::WaitQueue;
 /// ```
 /// use std::cell::RefCell;
 /// use std::rc::Rc;
-/// use simu::{SimEnv, PriorityResource};
+/// use simcore::{SimEnv, PriorityResource};
 ///
 /// let mut env = SimEnv::with_seed(0);
 /// let doctor = PriorityResource::new(1);

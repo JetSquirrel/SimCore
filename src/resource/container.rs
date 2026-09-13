@@ -158,7 +158,7 @@ fn trigger_cascade(state: &mut ContainerState) {
 /// tanker truck's delivery:
 ///
 /// ```
-/// use simu::{SimEnv, Container};
+/// use simcore::{SimEnv, Container};
 ///
 /// let mut env = SimEnv::with_seed(0);
 /// let tank = Container::new(100.0, 20.0); // capacity 100, starts at 20

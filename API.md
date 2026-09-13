@@ -1,8 +1,8 @@
-# simu — API Cheat-Sheet
+# SimCore — API Cheat-Sheet
 
-At-a-glance signatures for the `simu` library (crates.io package: **`simu-des`**).
+At-a-glance signatures for the SimCore library (crates.io package: **`simcore-des`**).
 Semantics, examples, and the guided tutorial live on
-[docs.rs](https://docs.rs/simu-des) — every public item there has full prose and
+[docs.rs](https://docs.rs/simcore-des) — every public item there has full prose and
 runnable doc-tests. For AI assistants there is a denser companion, [`llms.txt`](llms.txt).
 
 ## Environment
@@ -77,7 +77,7 @@ all_of![fut1, fut2].await;               // barrier; arms must be Future<Output 
 let results: Vec<R> = monte_carlo::run(seeds, |seed| { /* build env inside */ });
 // results in seed order; a worker panic re-raises on the caller thread
 
-use simu::rng::{sample, SplitMix64};     // portable feed, mirrored in Python
+use simcore::rng::{sample, SplitMix64}; // portable feed, mirrored in Python
 sample::uniform01(&mut rng)              // [0, 1)
 sample::exponential(&mut rng, mean)
 sample::bernoulli(&mut rng, p)

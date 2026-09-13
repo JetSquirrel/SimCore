@@ -20,7 +20,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::{any_of, PreemptiveResource, PriorityResource, Resource, SimEnv};
+use simcore::{any_of, PreemptiveResource, PriorityResource, Resource, SimEnv};
 
 type Log = Rc<RefCell<Vec<String>>>;
 

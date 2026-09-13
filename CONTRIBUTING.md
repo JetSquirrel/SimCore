@@ -1,6 +1,6 @@
-# Contributing to simu
+# Contributing to SimCore
 
-Contributions to simu are always welcome. This document explains the general
+Contributions to SimCore are always welcome. This document explains the general
 requirements on contributions and the recommended preparation steps. It also
 sketches the typical integration process of pull requests.
 
@@ -39,7 +39,7 @@ sketches the typical integration process of pull requests.
 - keep the documentation in sync [**required**]
   - `SPEC.md` is the design source of truth and `API.md` the signature
     cheat-sheet; update both when behaviour or the public API changes
-  - code patterns in `llms.txt` and `docs/simu-for-agents.md` must be verbatim
+  - code patterns in `llms.txt` and `docs/simcore-for-agents.md` must be verbatim
     copies of doc-tests — never hand-write parallel snippets
   - add a line to `CHANGELOG.md` under *Unreleased* for user-visible changes
 
@@ -92,7 +92,7 @@ following:
 
 ## License
 
-simu is dual-licensed under **MIT OR Apache-2.0**. Unless you explicitly state
+SimCore is dual-licensed under **MIT OR Apache-2.0**. Unless you explicitly state
 otherwise, any contribution intentionally submitted for inclusion in the work by
 you, as defined in the Apache-2.0 license, shall be dual licensed as above,
 without any additional terms or conditions.
@@ -110,7 +110,7 @@ without any additional terms or conditions.
 3. accepted pull requests are merged into `master`
 
 4. releases are tagged (`vX.Y.Z`) and published to crates.io as
-   [`simu-des`](https://crates.io/crates/simu-des) by the maintainers
+   [`simcore-des`](https://crates.io/crates/simcore-des) by the maintainers
 
 Questions and ideas are welcome as GitHub issues or discussions at
-<https://github.com/chkhm/simu>.
+<https://github.com/JetSquirrel/SimCore>.

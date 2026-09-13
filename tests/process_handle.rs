@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use simu::{all_of, any_of, SimEnv};
+use simcore::{all_of, any_of, SimEnv};
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }

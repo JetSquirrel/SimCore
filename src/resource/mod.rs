@@ -33,7 +33,7 @@ use wait_queue::WaitQueue;
 /// first one's guard drops:
 ///
 /// ```
-/// use simu::{SimEnv, Resource};
+/// use simcore::{SimEnv, Resource};
 ///
 /// let mut env = SimEnv::with_seed(0);
 /// let pump = Resource::new(1);

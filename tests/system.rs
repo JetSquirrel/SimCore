@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::RngCore;
-use simu::SimEnv;
-use simu::Resource;
+use simcore::SimEnv;
+use simcore::Resource;
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }
@@ -110,9 +110,9 @@ fn test_system_determinism() {
 
 #[test]
 fn monte_carlo_run() {
-    // Exercise simu::monte_carlo::run — spawns one thread per seed and
+    // Exercise simcore::monte_carlo::run — spawns one thread per seed and
     // collects results in seed order.
-    let results = simu::monte_carlo::run(0..4, |seed| {
+    let results = simcore::monte_carlo::run(0..4, |seed| {
         let mut env = SimEnv::with_seed(seed);
         let h = env.handle();
         env.spawn(async move { h.timeout(seed as f64).await; });
@@ -160,7 +160,7 @@ fn dropping_env_reclaims_suspended_processes() {
 #[test]
 #[should_panic(expected = "worker boom")]
 fn monte_carlo_propagates_worker_panic() {
-    let _ = simu::monte_carlo::run(0..8u64, |seed| {
+    let _ = simcore::monte_carlo::run(0..8u64, |seed| {
         if seed == 5 {
             panic!("worker boom");
         }
@@ -176,7 +176,7 @@ fn monte_carlo_accepts_borrowing_closure() {
     // (pre-A5 the `'static` bound forced moves/clones). This is primarily a
     // compile-time proof; the assertions confirm the borrowed data was used.
     let offsets: Vec<u64> = vec![100, 200, 300];
-    let results = simu::monte_carlo::run(0..3u64, |seed| {
+    let results = simcore::monte_carlo::run(0..3u64, |seed| {
         // `offsets` is borrowed, not moved.
         offsets[seed as usize] + seed
     });

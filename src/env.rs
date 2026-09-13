@@ -32,7 +32,7 @@ type SharedRng = Rc<RefCell<Box<dyn RandomSource>>>;
 /// results.
 ///
 /// ```
-/// use simu::SimEnv;
+/// use simcore::SimEnv;
 ///
 /// let mut env = SimEnv::with_seed(1);
 /// let h = env.handle();
@@ -114,7 +114,7 @@ impl SimEnv {
     /// comparison harness re-implements in Python:
     ///
     /// ```
-    /// use simu::{SimEnv, rng::SplitMix64};
+    /// use simcore::{SimEnv, rng::SplitMix64};
     /// let env = SimEnv::with_source(SplitMix64::new(42));
     /// ```
     #[must_use]
@@ -343,7 +343,7 @@ impl EnvHandle {
     /// across an `.await` point.
     ///
     /// ```
-    /// use simu::{SimEnv, rng::sample};
+    /// use simcore::{SimEnv, rng::sample};
     /// let env = SimEnv::with_seed(0);
     /// let h = env.handle();
     /// let duration = sample::exponential(&mut h.rng(), 20.0); // mean = 20

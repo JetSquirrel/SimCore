@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rand::RngCore;
-use simu::SimEnv;
-use simu::{all_of, any_of};
+use simcore::SimEnv;
+use simcore::{all_of, any_of};
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }

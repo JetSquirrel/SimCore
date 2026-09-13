@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Machine-readable comparison runner for the simu-vs-SimPy harness.
+//! Machine-readable comparison runner for the SimCore-vs-SimPy harness.
 //!
 //! Runs one of several models for a range of seeds and prints a single JSON
 //! object on stdout describing per-seed output metrics plus wall-clock time and
@@ -40,8 +40,8 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use simu::rng::{sample, SplitMix64};
-use simu::{any_of, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
+use simcore::rng::{sample, SplitMix64};
+use simcore::{any_of, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
 // CLI args
@@ -566,7 +566,7 @@ fn main() {
     let per_seed: Vec<String> = if args.parallel {
         let model = args.model.clone();
         let (n, lambda, mu, servers) = (args.n, args.lambda, args.mu, args.servers);
-        simu::monte_carlo::run(0..args.seeds, move |seed| {
+        simcore::monte_carlo::run(0..args.seeds, move |seed| {
             run_model(&model, seed, n, lambda, mu, servers)
         })
     } else {
@@ -584,7 +584,7 @@ fn main() {
         .sum();
 
     let meta = obj(&[
-        ("tool", "\"simu\"".to_string()),
+        ("tool", "\"simcore\"".to_string()),
         ("model", format!("\"{}\"", args.model)),
         ("seeds", args.seeds.to_string()),
         ("n", args.n.to_string()),

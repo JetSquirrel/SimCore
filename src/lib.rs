@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `simu` is a library for **discrete-event simulation** (DES), inspired by
-//! Python's [SimPy](https://simpy.readthedocs.io/) but built to be idiomatic
-//! Rust, fast, and reproducible.
+//! `simcore` is a tiny deterministic **discrete-event simulation** (DES)
+//! kernel for building system simulators, inspired by Python's
+//! [SimPy](https://simpy.readthedocs.io/) but built to be idiomatic Rust,
+//! fast, and reproducible.
 //!
 //! Simulation processes are ordinary `async` blocks driven by a custom,
 //! single-threaded executor over *simulated* time — there is no tokio/async-std
@@ -13,17 +14,17 @@
 //! `(time, insertion)` so a run is fully deterministic given the same seed and
 //! logic.
 //!
-//! **New to simu? Start with the [`tutorial`] module** — five short chapters
+//! **New to SimCore? Start with the [`tutorial`] module** — five short chapters
 //! modeled on SimPy's "SimPy in 10 minutes", every snippet a running doc-test.
 //!
-//! The crates.io package is named **`simu-des`** (the name `simu` was taken)
-//! but the library target is `simu`: depend on `simu-des = "0.1"` and write
-//! `use simu::…` exactly as in the examples here.
+//! The crates.io package is named **`simcore-des`** (the name `simcore` was
+//! taken) but the library target is `simcore`: depend on `simcore-des = "0.1"`
+//! and write `use simcore::…` exactly as in the examples here.
 //!
 //! # Quick start
 //!
 //! ```
-//! use simu::{SimEnv, Resource};
+//! use simcore::{SimEnv, Resource};
 //!
 //! let mut env = SimEnv::with_seed(42);
 //! let machine = Resource::new(1); // a pool of one unit, shared by cloning

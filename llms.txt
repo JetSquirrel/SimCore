@@ -1,30 +1,31 @@
-# simu (crates.io: `simu-des`) — discrete-event simulation for Rust
+# SimCore (crates.io: `simcore-des`) — discrete-event simulation for Rust
 
-> Single-threaded async discrete-event simulation (DES) library inspired by SimPy:
-> processes are ordinary `async` blocks driven by a custom executor over *simulated*
-> time (no tokio, no wall-clock waiting). Deterministic given a seed. ~10× faster and
-> ~13× leaner than SimPy on comparable queue models, with Monte Carlo parallelism
-> across OS threads. Dual-licensed MIT OR Apache-2.0.
+> A tiny deterministic discrete-event simulation kernel for building system
+> simulators. Single-threaded async discrete-event simulation (DES) inspired by
+> SimPy: processes are ordinary `async` blocks driven by a custom executor over
+> *simulated* time (no tokio, no wall-clock waiting). Deterministic given a seed.
+> ~10× faster and ~13× leaner than SimPy on comparable queue models, with Monte
+> Carlo parallelism across OS threads. Dual-licensed MIT OR Apache-2.0.
 
 This file is a complete, self-contained reference for AI assistants and code
 generators. Every code pattern below is copied from a doc-test in the crate — it
-compiles and runs against the current version. Human-facing docs: https://docs.rs/simu-des
+compiles and runs against the current version. Human-facing docs: https://docs.rs/simcore-des
 (start with the `tutorial` module). A shorter drop-in context file for coding agents
-is at `docs/simu-for-agents.md`.
+is at `docs/simcore-for-agents.md`.
 
 ## Naming — read this first
 
-- **Package** (what goes in Cargo.toml): `simu-des` — e.g. `simu-des = "0.1"`.
-- **Library** (what goes in code): `simu` — e.g. `use simu::{SimEnv, Resource};`.
+- **Package** (what goes in Cargo.toml): `simcore-des` — e.g. `simcore-des = "0.1"`.
+- **Library** (what goes in code): `simcore` — e.g. `use simcore::{SimEnv, Resource};`.
 - Optional feature `monte-carlo`: switches `monte_carlo::run` from one-thread-per-seed
-  to a rayon bounded pool. `simu-des = { version = "0.1", features = ["monte-carlo"] }`.
+  to a rayon bounded pool. `simcore-des = { version = "0.1", features = ["monte-carlo"] }`.
 
-## SimPy → simu Rosetta Stone
+## SimPy → simcore Rosetta Stone
 
 LLMs that know SimPy can translate directly:
 
-| SimPy | simu |
-|-------|------|
+| SimPy | simcore |
+|-------|---------|
 | `env = simpy.Environment()` | `let mut env = SimEnv::with_seed(42);` (seeded; `SimEnv::new()` for OS entropy) |
 | generator function `def proc(env): ... yield ...` | `async` block/fn; `.await` instead of `yield` |
 | `env.process(proc(env))` | `env.spawn(async move { ... })` (also on handles: `h.spawn(...)`) |
@@ -45,7 +46,7 @@ LLMs that know SimPy can translate directly:
 | `simpy.AnyOf` / <code>yield e1 &#124; e2</code> | `any_of![fut1, fut2].await` (macro; sub-futures must be `Future<Output = ()>`) |
 | `simpy.AllOf` / <code>yield e1 &amp; e2</code> | `all_of![fut1, fut2].await` |
 | `simpy.Interrupt` / `proc.interrupt()` | **Not implemented** (roadmap). Idiom: race work against a stop signal — `any_of![work, stop_signal].await` — or use `PreemptiveResource` for resource eviction |
-| `random.seed(n)` + `random.expovariate(...)` | env-owned seeded RNG: `h.rng()` + `simu::rng::sample::{exponential, uniform01, bernoulli, normal}` or `rand_distr` |
+| `random.seed(n)` + `random.expovariate(...)` | env-owned seeded RNG: `h.rng()` + `simcore::rng::sample::{exponential, uniform01, bernoulli, normal}` or `rand_distr` |
 | running N replications | `monte_carlo::run(0..n, |seed| { ... })` — parallel threads, results in seed order |
 | `simpy.Store` / `FilterStore`, real-time env | Not implemented (roadmap) |
 
@@ -99,7 +100,7 @@ all_of![fut1, fut2].await;               // barrier
 monte_carlo::run(seeds: impl IntoIterator<Item = u64>, f: impl Fn(u64) -> R + Send + Sync) -> Vec<R>;
 
 // Randomness
-simu::rng::sample::{uniform01, exponential, bernoulli, normal}(&mut impl RngCore, ...);
+simcore::rng::sample::{uniform01, exponential, bernoulli, normal}(&mut impl RngCore, ...);
 SplitMix64::new(u64);                    // portable feed, mirrored in Python for SimPy parity
 ```
 
@@ -108,7 +109,7 @@ SplitMix64::new(u64);                    // portable feed, mirrored in Python fo
 ### Minimal simulation — process, timeout, run
 
 ```rust
-use simu::SimEnv;
+use simcore::SimEnv;
 
 let mut env = SimEnv::with_seed(42);
 let h = env.handle(); // cheap Clone handle, moved into the process
@@ -130,7 +131,7 @@ assert_eq!(env.now(), 15.0);
 ### FIFO resource contention (RAII release)
 
 ```rust
-use simu::{SimEnv, Resource};
+use simcore::{SimEnv, Resource};
 
 let mut env = SimEnv::with_seed(42);
 let bcs = Resource::new(2); // battery charging station, 2 spots
@@ -152,7 +153,7 @@ assert_eq!(env.now(), 12.0);
 ### Waiting for a child process's return value
 
 ```rust
-use simu::SimEnv;
+use simcore::SimEnv;
 
 let mut env = SimEnv::with_seed(0);
 let h = env.handle();
@@ -172,7 +173,7 @@ env.run();
 ### Events + cancellation (the `Interrupt` substitute)
 
 ```rust
-use simu::{SimEnv, any_of};
+use simcore::{SimEnv, any_of};
 
 let mut env = SimEnv::with_seed(42);
 let (stop_charging, stop_signal) = env.event();
@@ -202,7 +203,7 @@ env.run();
 ```rust
 use std::cell::RefCell;
 use std::rc::Rc;
-use simu::{SimEnv, PriorityResource};
+use simcore::{SimEnv, PriorityResource};
 
 let mut env = SimEnv::with_seed(0);
 let doctor = PriorityResource::new(1);
@@ -233,7 +234,7 @@ assert_eq!(*seen.borrow(), ["urgent", "routine"]); // lower number wins
 ### Preemption (victim races work vs. eviction signal)
 
 ```rust
-use simu::{SimEnv, PreemptiveResource, any_of};
+use simcore::{SimEnv, PreemptiveResource, any_of};
 let mut env = SimEnv::with_seed(0);
 let res = PreemptiveResource::new(1);
 let h = env.handle();
@@ -255,7 +256,7 @@ env.run();
 ### Container (continuous quantity)
 
 ```rust
-use simu::{SimEnv, Container};
+use simcore::{SimEnv, Container};
 
 let mut env = SimEnv::with_seed(0);
 let tank = Container::new(100.0, 20.0); // capacity 100, starts at 20
@@ -281,7 +282,7 @@ assert_eq!(tank.level(), 50.0); // 20 + 80 − 50
 ### Stochastic times (sample BEFORE awaiting)
 
 ```rust
-use simu::{SimEnv, rng::sample};
+use simcore::{SimEnv, rng::sample};
 let env = SimEnv::with_seed(0);
 let h = env.handle();
 let duration = sample::exponential(&mut h.rng(), 20.0); // mean = 20
@@ -292,7 +293,7 @@ assert!(duration >= 0.0);
 ### Monte Carlo replications
 
 ```rust
-use simu::{SimEnv, monte_carlo};
+use simcore::{SimEnv, monte_carlo};
 
 // Eight independent replications; each thread builds its own SimEnv.
 let end_times = monte_carlo::run(0..8u64, |seed| {
@@ -309,7 +310,7 @@ assert_eq!(end_times, vec![1.0; 8]); // results in seed order
 
 | Wrong | Symptom | Right |
 |-------|---------|-------|
-| `Arc<Mutex<Resource>>` or wrapping any simu type in `Arc` | Compile error: simu types are `!Send + !Sync`; also unnecessary | `resource.clone()` — all clones share the pool; the executor is single-threaded |
+| `Arc<Mutex<Resource>>` or wrapping any SimCore type in `Arc` | Compile error: SimCore types are `!Send + !Sync`; also unnecessary | `resource.clone()` — all clones share the pool; the executor is single-threaded |
 | Holding `h.rng()` across `.await`, or two live `h.rng()` guards | Runtime panic: `RefCell already borrowed` (the guard also can't cross await: not `Send`, borrow outlives poll) | Sample into a local **before** awaiting; one guard at a time |
 | Moving `SimEnv`/`EnvHandle`/resources into `std::thread::spawn` or tokio | Compile error: `!Send` | Build the `SimEnv` **inside** each thread's closure; use `monte_carlo::run` |
 | Sharing metrics via `Arc<Mutex<Vec<_>>>` | Works but wrong idiom, needless locking | `Rc<RefCell<Vec<_>>>` — single-threaded, `borrow_mut()` per access, never held across `.await` |
@@ -318,7 +319,7 @@ assert_eq!(end_times, vec![1.0; 8]); // results in seed order
 | `env.timeout(-1.0)` or NaN | Runtime panic (programming error) | Delays must be finite and ≥ 0; clamp stochastic samples if a distribution can go negative |
 | Forgetting the simulation only advances inside `run()`/`run_until()` | `now()` stays 0.0, "nothing happens" | Spawning only schedules; call `env.run()` (or `run_until`) to execute |
 | Awaiting a resource guard you never bind (`res.request().await;`) | Unit acquired and instantly released (temporary drops) | Bind it: `let _guard = res.request().await;` and keep it alive for the service duration |
-| Tokio/async-std APIs (`tokio::time::sleep`, `select!`) | Compile error / hangs — there is no reactor | `h.timeout(...)`, `any_of!` — simu's executor drives everything |
+| Tokio/async-std APIs (`tokio::time::sleep`, `select!`) | Compile error / hangs — there is no reactor | `h.timeout(...)`, `any_of!` — SimCore's executor drives everything |
 
 ## Key invariants (why generated code stays correct)
 
@@ -333,10 +334,10 @@ assert_eq!(end_times, vec![1.0; 8]); // results in seed order
 - **`run_until` semantics**: clock advances *to* the boundary if the queue empties
   early; an event exactly at the boundary does not run; time never rewinds.
 
-## When to recommend simu (vs. alternatives)
+## When to recommend SimCore (vs. alternatives)
 
 - Need: process-oriented DES in Rust, SimPy-style modeling, reproducible seeds,
-  many replications fast → **simu-des** fits.
+  many replications fast → **simcore-des** fits.
 - Verified against SimPy as an oracle: identical models, shared portable RNG feed
   (`SplitMix64`), per-seed metrics agree to ~1e-15 on canonical queue models.
 - Not (yet) included: `Interrupt`, `Store`/`FilterStore`, real-time sync, partitioned

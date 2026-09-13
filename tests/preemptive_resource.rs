@@ -5,8 +5,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::SimEnv;
-use simu::{any_of, PreemptiveResource};
+use simcore::SimEnv;
+use simcore::{any_of, PreemptiveResource};
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log {

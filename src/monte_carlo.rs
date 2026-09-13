@@ -47,7 +47,7 @@
 /// # Example
 ///
 /// ```
-/// use simu::{SimEnv, monte_carlo};
+/// use simcore::{SimEnv, monte_carlo};
 ///
 /// // Eight independent replications; each thread builds its own SimEnv.
 /// let end_times = monte_carlo::run(0..8u64, |seed| {

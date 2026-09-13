@@ -485,7 +485,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "simu-des"
+name = "simcore-des"
 version = "0.1.0"
 dependencies = [
  "criterion",

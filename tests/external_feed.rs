@@ -12,9 +12,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::SimEnv;
-use simu::rng::{sample, SplitMix64};
-use simu::{EnvHandle, Resource};
+use simcore::SimEnv;
+use simcore::rng::{sample, SplitMix64};
+use simcore::{EnvHandle, Resource};
 
 type Log = Rc<RefCell<Vec<String>>>;
 

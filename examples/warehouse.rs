@@ -12,13 +12,13 @@ use std::rc::Rc;
 
 use rand::Rng;
 use rand_distr::{Exp, Normal};
-use simu::{any_of, AllOf, Container, EnvHandle, PreemptiveResource, PriorityResource, Resource, SimEnv};
+use simcore::{any_of, AllOf, Container, EnvHandle, PreemptiveResource, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
 // Warehouse / distribution-center simulation — goods flow in on trucks and out
 // on customer orders, sharing one small fleet of forklifts between the two.
 //
-// Demonstrates every public primitive of `simu`, with a preemptible forklift
+// Demonstrates every public primitive of `simcore`, with a preemptible forklift
 // fleet as the centerpiece (the first example to exercise `PreemptiveResource`):
 //
 //  • PreemptiveResource : forklift fleet — routine putaway (priority 1) is
@@ -764,7 +764,7 @@ fn run_simulation(seed: u64) -> SimResult {
 // ---------------------------------------------------------------------------
 
 fn main() {
-    let results = simu::monte_carlo::run(0..10, run_simulation);
+    let results = simcore::monte_carlo::run(0..10, run_simulation);
 
     println!(
         "{:>4}  {:>7}  {:>7}  {:>8}  {:>8}  {:>8}  {:>9}  {:>7}  {:>7}  {:>7}  {:>8}",

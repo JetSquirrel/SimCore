@@ -72,7 +72,7 @@ CIP capacity is a genuine bottleneck in high-throughput breweries.
 production line whose central bio-reactor (the fermenter) is the system's
 natural bottleneck.
 
-It exercises every public primitive of `simu` in a single scenario:
+It exercises every public primitive of `simcore` in a single scenario:
 
 | Feature              | How it is used                                                                       |
 |----------------------|--------------------------------------------------------------------------------------|

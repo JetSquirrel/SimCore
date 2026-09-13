@@ -31,7 +31,7 @@ struct EventState {
 /// the fire (the latch makes it resolve immediately):
 ///
 /// ```
-/// use simu::SimEnv;
+/// use simcore::SimEnv;
 ///
 /// let mut env = SimEnv::with_seed(0);
 /// let (trigger, ready) = env.event();

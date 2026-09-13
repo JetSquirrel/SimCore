@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! **simu in 10 minutes** — a guided tour, one concept per chapter.
+//! **SimCore in 10 minutes** — a guided tour, one concept per chapter.
 //!
 //! This tutorial mirrors the structure of SimPy's
 //! ["SimPy in 10 minutes"](https://simpy.readthedocs.io/en/latest/simpy_intro/)
@@ -32,7 +32,7 @@
 /// between, which is why a simulated year can take milliseconds of wall-clock
 /// time.
 ///
-/// In simu, a process is an ordinary `async` block. Waiting is `.await`ing a
+/// In SimCore, a process is an ordinary `async` block. Waiting is `.await`ing a
 /// [`Timeout`](crate::Timeout): the executor suspends the process and resumes
 /// it when the simulated clock reaches the deadline. There is no tokio and no
 /// threads — one [`SimEnv`](crate::SimEnv) owns the clock and drives
@@ -41,7 +41,7 @@
 /// Our first process models a car that alternately parks and drives:
 ///
 /// ```
-/// use simu::SimEnv;
+/// use simcore::SimEnv;
 ///
 /// let mut env = SimEnv::with_seed(42);
 /// let h = env.handle(); // cheap Clone handle, moved into the process
@@ -88,7 +88,7 @@ pub mod ch01_basic_concepts {}
 ///
 /// Processes can start other processes and wait for them — the building block
 /// for "do this sub-task, then continue". In SimPy you `yield env.process(...)`;
-/// in simu, [`spawn`](crate::EnvHandle::spawn) returns a
+/// in SimCore, [`spawn`](crate::EnvHandle::spawn) returns a
 /// [`ProcessHandle`](crate::ProcessHandle) which is itself a future: awaiting
 /// it suspends you until the child process finishes and hands you its return
 /// value.
@@ -97,7 +97,7 @@ pub mod ch01_basic_concepts {}
 /// drive again — and charging is its own process:
 ///
 /// ```
-/// use simu::SimEnv;
+/// use simcore::SimEnv;
 ///
 /// let mut env = SimEnv::with_seed(42);
 /// let h = env.handle();
@@ -143,7 +143,7 @@ pub mod ch02_waiting_for_processes {}
 /// Chapter 3: Events, and cancelling work early.
 ///
 /// Timeouts model *known* waiting times. For "wait until something happens",
-/// simu has manual events: [`env.event()`](crate::SimEnv::event) returns a
+/// SimCore has manual events: [`env.event()`](crate::SimEnv::event) returns a
 /// paired ([`EventTrigger`](crate::EventTrigger),
 /// [`EventAwaitable`](crate::EventAwaitable)). Awaiting the awaitable suspends
 /// a process until someone calls [`fire()`](crate::EventTrigger::fire) on the
@@ -151,7 +151,7 @@ pub mod ch02_waiting_for_processes {}
 /// firing after the fact is fine too — late awaiters resolve immediately.
 ///
 /// SimPy's version of "stop what you're doing" is throwing an `Interrupt`
-/// into a process. simu has no interrupt (it is on the roadmap — SPEC §6);
+/// into a process. SimCore has no interrupt (it is on the roadmap — SPEC §6);
 /// instead, cancellation is expressed by **racing futures** with
 /// [`any_of!`](crate::any_of): await *either* the work finishing *or* a stop
 /// signal, whichever comes first. The losing future is dropped — and dropping
@@ -160,7 +160,7 @@ pub mod ch02_waiting_for_processes {}
 /// The driver gets impatient and stops a 5-unit charge after 3 units:
 ///
 /// ```
-/// use simu::{SimEnv, any_of};
+/// use simcore::{SimEnv, any_of};
 ///
 /// let mut env = SimEnv::with_seed(42);
 /// let (stop_charging, stop_signal) = env.event();
@@ -220,7 +220,7 @@ pub mod ch03_events_and_cancellation {}
 /// Four cars arrive, staggered, at a two-spot battery charging station:
 ///
 /// ```
-/// use simu::{SimEnv, Resource};
+/// use simcore::{SimEnv, Resource};
 ///
 /// let mut env = SimEnv::with_seed(42);
 /// let bcs = Resource::new(2); // battery charging station, 2 spots
@@ -269,7 +269,7 @@ pub mod ch04_shared_resources {}
 
 /// Chapter 5: How to proceed.
 ///
-/// You now know the core loop of every simu model: spawn processes, await
+/// You now know the core loop of every SimCore model: spawn processes, await
 /// timeouts / events / resources, run, read out results. The rest of the
 /// toolbox, in the order you are likely to need it:
 ///
@@ -294,7 +294,7 @@ pub mod ch04_shared_resources {}
 ///   one full, independent simulation per seed in parallel threads:
 ///
 /// ```
-/// use simu::{SimEnv, monte_carlo};
+/// use simcore::{SimEnv, monte_carlo};
 ///
 /// let end_times = monte_carlo::run(0..8u64, |seed| {
 ///     let mut env = SimEnv::with_seed(seed);
@@ -318,5 +318,5 @@ pub mod ch04_shared_resources {}
 ///   receiving and shipping (`PreemptiveResource` end-to-end).
 ///
 /// Coming from SimPy? The repository root has `llms.txt` with a complete
-/// SimPy → simu translation table.
+/// SimPy → SimCore translation table.
 pub mod ch05_how_to_proceed {}

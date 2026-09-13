@@ -12,8 +12,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use simu::SimEnv;
-use simu::{any_of, Container, PriorityResource, Resource};
+use simcore::SimEnv;
+use simcore::{any_of, Container, PriorityResource, Resource};
 
 type Log = Rc<RefCell<Vec<String>>>;
 fn new_log() -> Log { Rc::new(RefCell::new(Vec::new())) }

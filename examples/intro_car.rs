@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Tutorial chapter 1 (`simu::tutorial::ch01_basic_concepts`): a car that
-//! alternately parks and drives. The smallest possible simu model — one
+//! Tutorial chapter 1 (`simcore::tutorial::ch01_basic_concepts`): a car that
+//! alternately parks and drives. The smallest possible SimCore model — one
 //! process, timeouts, and the clock.
 
-use simu::SimEnv;
+use simcore::SimEnv;
 
 fn main() {
     let mut env = SimEnv::with_seed(42);

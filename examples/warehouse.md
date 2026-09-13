@@ -143,7 +143,7 @@ the **logistics / material-handling** domain. Its centerpiece is a
 **preemptible forklift fleet** shared between receiving and shipping, which makes
 it the first example to exercise `PreemptiveResource`.
 
-It exercises every public primitive of `simu` in a single scenario:
+It exercises every public primitive of `simcore` in a single scenario:
 
 | Feature                       | How it is used                                                                                          |
 |-------------------------------|---------------------------------------------------------------------------------------------------------|

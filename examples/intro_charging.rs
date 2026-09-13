@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Tutorial chapter 2 (`simu::tutorial::ch02_waiting_for_processes`): an
+//! Tutorial chapter 2 (`simcore::tutorial::ch02_waiting_for_processes`): an
 //! electric car whose driving process waits for its charging process —
 //! spawning a child process and awaiting its `ProcessHandle`.
 
-use simu::SimEnv;
+use simcore::SimEnv;
 
 fn main() {
     let mut env = SimEnv::with_seed(42);

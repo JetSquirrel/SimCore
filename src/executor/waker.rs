@@ -20,7 +20,7 @@ impl Wake for SimWaker {
     fn wake_by_ref(self: &Arc<Self>) {
         self.ready_queue
             .lock()
-            .expect("simu ready-queue mutex poisoned")
+            .expect("simcore ready-queue mutex poisoned")
             .push(self.process_id);
     }
 }

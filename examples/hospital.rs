@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use rand::Rng;
 use rand_distr::Exp;
-use simu::{any_of, AllOf, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
+use simcore::{any_of, AllOf, Container, EnvHandle, EventTrigger, PriorityResource, Resource, SimEnv};
 
 // ---------------------------------------------------------------------------
 // Hospital simulation — demonstrates post-MVP features:
@@ -327,7 +327,7 @@ fn run_simulation(seed: u64) -> SimResult {
 // ---------------------------------------------------------------------------
 
 fn main() {
-    let results = simu::monte_carlo::run(0..10, run_simulation);
+    let results = simcore::monte_carlo::run(0..10, run_simulation);
 
     println!(
         "{:>6}  {:>8}  {:>8}  {:>7}  {:>11}  {:>17}  {:>14}  {:>15}  {:>10}",

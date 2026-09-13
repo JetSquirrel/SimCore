@@ -1,7 +1,7 @@
 # Hospital Simulation — Example Walkthrough
 
 `examples/hospital.rs` is a Monte Carlo hospital-emergency-department simulation
-that exercises every post-MVP feature of `simu` in a single, realistic scenario:
+that exercises every post-MVP feature of `simcore` in a single, realistic scenario:
 
 | Feature              | How it is used                                                   |
 |----------------------|------------------------------------------------------------------|

@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 /// A future that resolves when **any one** of its sub-futures resolves.
 ///
 /// All sub-futures must have `Output = ()`, which is the common output type
-/// of all simu event primitives (`Timeout`, `EventAwaitable`, etc.).
+/// of all SimCore event primitives (`Timeout`, `EventAwaitable`, etc.).
 ///
 /// When a sub-future resolves, the remaining ones are dropped. Any wakers they
 /// registered may still fire later; the executor handles such spurious wakeups
@@ -124,7 +124,7 @@ impl Future for AllOf {
 /// # Example
 ///
 /// ```
-/// use simu::{SimEnv, any_of};
+/// use simcore::{SimEnv, any_of};
 /// let mut env = SimEnv::with_seed(0);
 /// let h = env.handle();
 /// let (trigger, signal) = env.event();
@@ -153,7 +153,7 @@ macro_rules! any_of {
 /// # Example
 ///
 /// ```
-/// use simu::{SimEnv, all_of};
+/// use simcore::{SimEnv, all_of};
 /// let mut env = SimEnv::with_seed(0);
 /// let h = env.handle();
 /// env.spawn(async move {

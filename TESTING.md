@@ -231,8 +231,8 @@ request future and its queue entry.
 
 ### tests/same_tick_races.rs — 5 tests
 
-Regression suite for Finding F1 (`reviews/2026-07-01-implementation-review.md`):
-a woken `WaitQueue` waiter must not be stranded — nor jumped in FIFO/priority
+Regression suite for a `WaitQueue` bug found in upstream review (fixed before
+the fork): a woken waiter must not be stranded — nor jumped in FIFO/priority
 order — by a *fresh* request that lands in the **same ready batch** (both woken
 by one `EventTrigger::fire()`). Four of the five tests fail against the pre-fix
 `release()` (verified by temporary revert); the guard-drop test guards the fixed
@@ -347,7 +347,7 @@ N values are the parameterized workload sizes passed to `BenchmarkId`.
 
 ## Cross-engine parity (SimPy)
 
-Beyond the `cargo test` suite, the `compare/` harness validates `simu` against
+Beyond the `cargo test` suite, the `compare/` harness validates `simcore` against
 Python's [SimPy](https://simpy.readthedocs.io/) as a reference oracle. Both
 engines draw from the **same portable feed** (`SplitMix64` + shared transforms,
 re-implemented in `compare/models/_feed.py`), so the order-insensitive queue
@@ -355,7 +355,7 @@ models are checked in **exact mode** — per-seed metrics must match within 1e-9
 (they land ~1e-15) — while `hospital` stays on the distributional test for its
 eviction-handoff ordering exception. Queue models are also checked against
 closed-form queueing theory. Performance is measured on two axes: single-thread
-engine efficiency, and a **Monte Carlo** benchmark where simu parallelises
+engine efficiency, and a **Monte Carlo** benchmark where SimCore parallelises
 independent replications via `monte_carlo::run` (rayon) while SimPy is
 GIL-serialised. The harness is what surfaced the `Container` strict-FIFO
 divergence (since fixed). Run it with `compare/run_comparison.sh`; see

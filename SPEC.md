@@ -1,8 +1,8 @@
-# simu — Discrete Event Simulation Library Specification
+# SimCore — Discrete Event Simulation Library Specification
 
 ## 1. Project Overview
 
-`simu` is a Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy but designed
+SimCore is a Rust library for Discrete Event Simulation (DES), inspired by Python's SimPy but designed
 from the ground up to be idiomatic Rust, high-performance, and scalable. The primary target use case is
 complex workflow simulation (e.g., hospital operations), where thousands of independent processes
 interact through shared resources and events.
@@ -11,10 +11,10 @@ interact through shared resources and events.
 
 ## 2. Crate Naming
 
-The library is imported as `simu` (`use simu::…`). The crates.io **package** name
-`simu` is already taken (an unrelated iOS-simulator CLI), so the crate publishes as
-**`simu-des`** while keeping `[lib] name = "simu"` — users add `simu-des = "0.1"`
-and still write `use simu::…`. See `PUBLISHING.md` for the full release plan.
+The library is imported as `simcore` (`use simcore::…`). The crates.io **package** name
+`simcore` is already taken, so the crate publishes as
+**`simcore-des`** while keeping `[lib] name = "simcore"` — users add `simcore-des = "0.1"`
+and still write `use simcore::…`. See `PUBLISHING.md` for the full release plan.
 
 ---
 
@@ -214,7 +214,7 @@ all are woken when `trigger.fire()` is called.
 **Combinators** `AnyOf` and `AllOf` compose any `Future<Output = ()>` futures:
 
 ```rust
-use simu::{any_of, all_of};
+use simcore::{any_of, all_of};
 
 // Race: resolve when the first of several events fires
 any_of![h.timeout(10.0), signal.clone()].await;
@@ -444,7 +444,7 @@ Each simulation run is a pure function of its inputs (config + seed). Multiple r
 OS threads. The recommended pattern uses the built-in `monte_carlo::run` helper:
 
 ```rust
-use simu::monte_carlo;
+use simcore::monte_carlo;
 
 let results = monte_carlo::run(0..10, |seed| {
     let mut env = SimEnv::with_seed(seed);
@@ -515,7 +515,7 @@ from under the woken waiter by a fresh request polled in the same ready batch.
 `try_acquire` is used only for a request's *initial* attempt; a woken waiter
 returns via its `granted` flag, never by re-acquiring. This closes a
 same-ready-batch stranding deadlock and the FIFO/priority violation it caused —
-see `reviews/2026-07-01-implementation-review.md` (Finding 1). A request that is
+regression suite: `tests/same_tick_races.rs`. A request that is
 granted but dropped before it re-polls (e.g. a losing `any_of!` arm) calls
 `release` from its `Drop` so the handed-off unit is passed on rather than leaked;
 a request that has turned its grant into a guard records that (`consumed`) so its
@@ -570,8 +570,9 @@ get, which immediately enables another put, and so on, all within a single call.
 
 Both immediate-completion paths (`get` and `put`) run the *full* cascade. An
 earlier asymmetry — where the immediate `put` path woke only get-waiters — could
-strand a put-waiter that a freshly-woken get had just made serviceable; see
-`reviews/2026-06-08-architecture-review.md` (Findings 1 & 2). Note that under the
+strand a put-waiter that a freshly-woken get had just made serviceable (found in
+upstream review, fixed before the fork; regression suite: `tests/container.rs`).
+Note that under the
 strict head-of-line FIFO guard above, a fresh immediate `put` can no longer
 coexist with a blocked put-waiter ahead of it (it would register behind instead),
 so a single cascade call now only ever services one queue; the bidirectional
@@ -675,7 +676,7 @@ to stdout. The full walkthroughs (configuration, sequence diagrams, sample outpu
 `examples/hospital.md`, `examples/brewery.md`, and `examples/warehouse.md`.
 
 They are complemented by four beginner-scale intro examples (`intro_car`, `intro_charging`,
-`intro_cancellation`, `intro_charging_station`), one per chapter of the `simu::tutorial` module —
+`intro_cancellation`, `intro_charging_station`), one per chapter of the `simcore::tutorial` module —
 each under 60 lines, single-concept, no Monte Carlo or logging scaffolding.
 
 ### 7.1 Hospital Simulation

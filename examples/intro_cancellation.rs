@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Tutorial chapter 3 (`simu::tutorial::ch03_events_and_cancellation`): the
+//! Tutorial chapter 3 (`simcore::tutorial::ch03_events_and_cancellation`): the
 //! impatient driver stops a 5-unit charge after 3 units. Manual events plus
-//! `any_of!` racing — simu's cancellation idiom (SimPy's `Interrupt` analogue).
+//! `any_of!` racing — SimCore's cancellation idiom (SimPy's `Interrupt` analogue).
 
-use simu::{any_of, SimEnv};
+use simcore::{any_of, SimEnv};
 
 fn main() {
     let mut env = SimEnv::with_seed(42);

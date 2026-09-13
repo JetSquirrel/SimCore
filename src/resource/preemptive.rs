@@ -98,7 +98,7 @@ impl PreemptiveState {
 /// holder races its work against that signal:
 ///
 /// ```
-/// use simu::{SimEnv, PreemptiveResource, any_of};
+/// use simcore::{SimEnv, PreemptiveResource, any_of};
 /// let mut env = SimEnv::with_seed(0);
 /// let res = PreemptiveResource::new(1);
 /// let h = env.handle();
