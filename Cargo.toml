@@ -21,6 +21,7 @@ rust-version = "1.82"
 exclude = [
     "compare/",
     "simcore-python/",
+    "sim-llm/",
     ".github/",
     "target/",
     ".claude/",
