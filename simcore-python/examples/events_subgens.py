@@ -6,8 +6,9 @@
 
 Covers the three SimPy-compatibility extensions (fresh Simulation per
 section so the traces stay crisp):
-- run_until processes events at exactly the boundary (SimPy semantics) and
-  the simulation stays resumable afterwards.
+- run_until is boundary-EXCLUSIVE (an event scheduled at exactly `until`
+  does not run, yet now() reports `until`) and the simulation stays
+  resumable afterwards — the pending boundary event fires on the next run.
 - Simulation.event() / Event.trigger(): one-shot latch, multiple waiters.
 - spawn() accepts plain generators; `yield sub()` drives sub-generators and
   delivers their return value as the yield result.

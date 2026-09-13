@@ -71,6 +71,31 @@ fn run_until_stops_at_boundary() {
 }
 
 #[test]
+fn run_until_is_exclusive_at_exact_boundary() {
+    // Documented contract (env.rs): an event scheduled exactly at `until`
+    // is NOT run, yet now() reports `until`. Regression: the implementation
+    // used to be boundary-inclusive (ran events at exactly `until`).
+    let mut env = SimEnv::with_seed(0);
+    let log = new_log();
+
+    let h = env.handle();
+    let log2 = log.clone();
+    env.spawn(async move {
+        h.timeout(10.0).await;
+        log2.borrow_mut().push(format!("{}", h.now()));
+    });
+
+    env.run_until(10.0);
+
+    assert_eq!(env.now(), 10.0);
+    assert!(log.borrow().is_empty(), "event at exactly `until` must not run");
+
+    // The pending event is still there and runs on the next run().
+    env.run();
+    assert_eq!(*log.borrow(), vec!["10"]);
+}
+
+#[test]
 fn zero_delay_timeout() {
     // timeout(0.0) still schedules a wakeup at the current time and returns
     // Pending on the first poll. It fires in the next event-queue cycle, so
